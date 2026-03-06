@@ -1,0 +1,109 @@
+################################################################################
+# Life is Feudal: Your Own — Docker Compose
+#
+# Two services:
+#   1. mariadb  — Database backend (required by LiF:YO)
+#   2. lif-yo   — The game server (Wine + Xvfb on Linux)
+#
+# Usage:
+#   docker compose build
+#   docker compose up -d
+#   docker compose logs -f lif-yo
+################################################################################
+
+services:
+
+  # ── MariaDB ─────────────────────────────────────────────────────────────────
+  mariadb:
+    image: mariadb:10.6
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:-rootChangeme}"
+      MARIADB_DATABASE:      "${DB_NAME:-lif_1}"
+      MARIADB_USER:          "${DB_USER:-lif}"
+      MARIADB_PASSWORD:      "${DB_PASSWORD:-changeme}"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./mariadb-custom.cnf:/etc/mysql/mariadb.conf.d/90-lifeisfeudal.cnf:ro
+    ports:
+      - "3306:3306"               # Expose if you want external DB tools; remove for production
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # ── Life is Feudal: Your Own ────────────────────────────────────────────────
+  lif-yo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      # ── Database ──────────────────────────────────────────────────────────
+      DB_HOST:          mariadb
+      DB_PORT:          "3306"
+      DB_USER:          "${DB_USER:-lif}"
+      DB_PASSWORD:      "${DB_PASSWORD:-changeme}"
+      DB_NAME:          "${DB_NAME:-lif_1}"
+
+      # ── Server identity ──────────────────────────────────────────────────
+      SERVER_NAME:      "${SERVER_NAME:-Life is Feudal Docker Server}"
+      SERVER_PASSWORD:  "${SERVER_PASSWORD:-}"
+      ADMIN_PASSWORD:   "${ADMIN_PASSWORD:-}"
+      GAME_MODE:        "${GAME_MODE:-Sandbox}"          # Sandbox | PermaDeath
+      IS_PRIVATE:       "${IS_PRIVATE:-0}"                # 1 = hidden from browser
+      GAME_PORT:        "${GAME_PORT:-28000}"
+      WORLD_ID:         "${WORLD_ID:-1}"
+      MAX_PLAYERS:      "${MAX_PLAYERS:-64}"              # 1–64
+
+      # ── Skills & progression ─────────────────────────────────────────────
+      SKILLS_MULTIPLIER:  "${SKILLS_MULTIPLIER:-10}"      # 0.1–100  (1 = vanilla MMO)
+      CRAFTING_SKILLCAP:  "${CRAFTING_SKILLCAP:-600}"     # 200–3000 (600 = vanilla)
+      COMBAT_SKILLCAP:    "${COMBAT_SKILLCAP:-400}"       # 200–3000 (400 = vanilla)
+      MINOR_SKILLCAP:     "${MINOR_SKILLCAP:-400}"        # 200–3000 (400 = vanilla)
+
+      # ── World simulation ─────────────────────────────────────────────────
+      OBJECT_DECAY_RATE:    "${OBJECT_DECAY_RATE:-0}"     # 0 = no decay
+      TERRAFORMING_SPEED:   "${TERRAFORMING_SPEED:-4}"    # 0.1–60  (0.8 = vanilla)
+      CRAFTING_PERIOD:      "${CRAFTING_PERIOD:-60}"       # 1–3600 secs per tick
+      ANIMAL_BREED_PERIOD:  "${ANIMAL_BREED_PERIOD:-60}"   # 1–600 mins between breed checks
+      DAY_CYCLE:            "${DAY_CYCLE:-3}"              # 0.5–24 real hours per game day
+      ANIMALS_COUNT:        "${ANIMALS_COUNT:-100}"        # 0–100 spawn points
+
+      # ── Miscellaneous ───────────────────────────────────────────────────
+      MOVABLE_MAX_DROP_HEIGHT:       "${MOVABLE_MAX_DROP_HEIGHT:-5}"
+      RANDOM_EVENT_CHANCE_WALKING:   "${RANDOM_EVENT_CHANCE_WALKING:-0.03}"
+      RANDOM_EVENT_CHANCE_ABILITY:   "${RANDOM_EVENT_CHANCE_ABILITY:-0.02}"
+      HORSE_DECAY:                   "${HORSE_DECAY:-90.00}"    # hours before unattended horses vanish
+      DROP_ON_PRAY:                  "${DROP_ON_PRAY:-0}"       # 1 = drop inventory on homecoming prayer
+
+      # ── Judgement Hour (guild warfare window) ────────────────────────────
+      JH_ENABLED:       "${JH_ENABLED:-0}"
+      JH_START_TIME:    "${JH_START_TIME:-18:00}"
+      JH_MON:           "${JH_MON:-0}"
+      JH_TUE:           "${JH_TUE:-0}"
+      JH_WED:           "${JH_WED:-0}"
+      JH_THU:           "${JH_THU:-0}"
+      JH_FRI:           "${JH_FRI:-0}"
+      JH_SAT:           "${JH_SAT:-0}"
+      JH_SUN:           "${JH_SUN:-0}"
+
+      # ── Maintenance ──────────────────────────────────────────────────────
+      UPDATE_ON_START:  "${UPDATE_ON_START:-false}"
+    ports:
+      - "${GAME_PORT:-28000}:${GAME_PORT:-28000}/udp"
+      - "${GAME_PORT:-28000}:${GAME_PORT:-28000}/tcp"
+    volumes:
+      - lif_config:/home/lif/yoserver/config          # Persist world configs
+      - lif_logs:/home/lif/yoserver/Logs               # Persist logs
+      - lif_server:/home/lif/yoserver                  # Persist full server (saves, mods, etc.)
+
+volumes:
+  mariadb_data:
+  lif_config:
+  lif_logs:
+  lif_server:

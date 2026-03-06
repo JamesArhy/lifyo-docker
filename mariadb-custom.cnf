@@ -1,0 +1,13 @@
+# Life is Feudal: Your Own — Required MariaDB settings
+# These are injected into the mariadb container via docker-compose volume mount.
+
+[mysqld]
+innodb_file_per_table       = ON
+innodb_file_format          = Barracuda
+innodb_flush_log_at_trx_commit = 1
+max_sp_recursion_depth      = 255
+max_allowed_packet          = 10M
+query_cache_size            = 0
+query_cache_type            = OFF
+character-set-server        = utf8
+collation-server            = utf8_general_ci
