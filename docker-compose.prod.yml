@@ -22,9 +22,16 @@ services:
       MARIADB_DATABASE:      "${DB_NAME:-lif_1}"
       MARIADB_USER:          "${DB_USER:-lif}"
       MARIADB_PASSWORD:      "${DB_PASSWORD:-changeme}"
+    # ── Bind mounts (default) ─────────────────────────────────────────────
     volumes:
-      - mariadb_data:/var/lib/mysql
+      - ./data/mariadb:/var/lib/mysql
       - ./mariadb-custom.cnf:/etc/mysql/mariadb.conf.d/90-lifeisfeudal.cnf:ro
+    # ── Docker volumes (alternative) ──────────────────────────────────────
+    # Uncomment below (and the volumes: block at the bottom) and comment
+    # out the bind mount above if you prefer Docker-managed volumes.
+    #volumes:
+    #  - mariadb_data:/var/lib/mysql
+    #  - ./mariadb-custom.cnf:/etc/mysql/mariadb.conf.d/90-lifeisfeudal.cnf:ro
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
@@ -98,13 +105,25 @@ services:
       - "${GAME_PORT_PLUS1:-28001}:${GAME_PORT_PLUS1:-28001}/tcp"
       - "${GAME_PORT_PLUS2:-28002}:${GAME_PORT_PLUS2:-28002}/udp"
       - "${GAME_PORT_PLUS2:-28002}:${GAME_PORT_PLUS2:-28002}/tcp"
+    # ── Bind mounts (default) ─────────────────────────────────────────────
+    # Data stored in ./data/ on the host. Easy to back up and inspect.
     volumes:
-      - lif_config:/home/lif/yoserver/config
-      - lif_logs:/home/lif/yoserver/Logs
-      - lif_wineprefix:/home/lif/.wine
+      - ./data/config:/home/lif/yoserver/config
+      - ./data/logs:/home/lif/yoserver/Logs
+      - ./data/wineprefix:/home/lif/.wine
 
-volumes:
-  mariadb_data:
-  lif_config:
-  lif_logs:
-  lif_wineprefix:
+    # ── Docker volumes (alternative) ──────────────────────────────────────
+    # Uncomment the lines below (and the volumes: block at the bottom) and
+    # comment out the bind mounts above if you prefer Docker-managed volumes.
+    #volumes:
+    #  - lif_config:/home/lif/yoserver/config
+    #  - lif_logs:/home/lif/yoserver/Logs
+    #  - lif_wineprefix:/home/lif/.wine
+
+# ── Named volumes (only needed if using Docker volumes alternative) ──────
+# Uncomment if you switched to Docker-managed volumes above.
+#volumes:
+#  mariadb_data:
+#  lif_config:
+#  lif_logs:
+#  lif_wineprefix:
