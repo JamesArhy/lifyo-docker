@@ -147,6 +147,14 @@ All settings are configured through environment variables in `.env` or
 | `JH_START_TIME` | `00:00` | Start time (HH:MM)                             |
 | `JH_MON`-`JH_SUN` | `0`  | `1` = Judgement active on that day              |
 
+### Backups
+
+| Variable          | Default | Description                                      |
+|-------------------|---------|--------------------------------------------------|
+| `BACKUP_ENABLED`  | `true`  | `true` = automatic DB + config backups           |
+| `BACKUP_INTERVAL` | `3600`  | Seconds between backups (3600 = 1 hour)          |
+| `BACKUP_KEEP`     | `5`     | Number of backup archives to retain              |
+
 ### Maintenance
 
 | Variable          | Default | Description                                  |
@@ -206,30 +214,50 @@ docker compose restart lif-yo
 
 ## Backups
 
+Automatic backups run inside the lif-yo container every hour by default. Each
+backup contains a full `mysqldump` (with stored procedures and triggers) plus
+the world config files, compressed into a single `.tar.gz`. Only the last 5
+backups are kept.
+
+Backups are stored in `/home/lif/backups/` inside the container. Mount this
+to a host directory to access them:
+
+| Compose file               | Default mount                          |
+|----------------------------|----------------------------------------|
+| `docker-compose.prod.yml`  | `./data/backups:/home/lif/backups`     |
+| `docker-compose.yml`       | `lif_backups` named volume             |
+
+Configure via environment variables (`BACKUP_ENABLED`, `BACKUP_INTERVAL`,
+`BACKUP_KEEP`) — see the [Backups env vars](#backups) section above.
+
+### Restore from backup
+
+```bash
+# Extract a backup
+tar xzf data/backups/lif_backup_20260312_140000.tar.gz -C /tmp/restore
+
+# Restore database
+docker compose exec -T mariadb mysql -u root -p"${DB_ROOT_PASSWORD}" lif_1 < /tmp/restore/db_dump.sql
+
+# Restore configs (if needed)
+cp /tmp/restore/config/* data/config/
+```
+
+### Data directories
+
 By default (`docker-compose.prod.yml`), all persistent data is stored in
 `./data/` on the host via bind mounts:
 
-| Path               | Contents                                                    |
-|--------------------|-------------------------------------------------------------|
-| `./data/mariadb/`  | MariaDB data files (character data, world state)            |
-| `./data/config/`   | World XML configs                                           |
-| `./data/logs/`     | Server log files                                            |
+| Path                 | Contents                                                    |
+|----------------------|-------------------------------------------------------------|
+| `./data/mariadb/`    | MariaDB data files (character data, world state)            |
+| `./data/config/`     | World XML configs                                           |
+| `./data/logs/`       | Server log files                                            |
 | `./data/wineprefix/` | Wine prefix (can be recreated, but saves ~2 min on startup) |
+| `./data/backups/`    | Automatic backup archives                                   |
 
 If you're building locally (`docker-compose.yml`), data is in Docker-managed
-named volumes instead (`mariadb_data`, `lif_config`, `lif_logs`, `lif_wineprefix`).
-
-```bash
-# Database dump
-docker compose exec mariadb mysqldump -u root -p"${DB_ROOT_PASSWORD}" lif_1 > backup.sql
-
-# Bind mount backup (prod) — just tar the data directory
-tar czf lif-backup.tar.gz data/
-
-# Named volume backup (local build)
-docker run --rm -v lifyo-docker_lif_config:/data -v $(pwd):/backup \
-  alpine tar czf /backup/lif-config-backup.tar.gz -C /data .
-```
+named volumes instead.
 
 ## Stopping & Starting
 

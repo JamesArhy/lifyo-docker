@@ -18,6 +18,9 @@ set -euo pipefail
 : "${GAME_PORT:=28000}"
 : "${WORLD_ID:=1}"
 : "${UPDATE_ON_START:=false}"
+: "${BACKUP_ENABLED:=true}"
+: "${BACKUP_INTERVAL:=3600}"
+: "${BACKUP_KEEP:=5}"
 
 # ── World config defaults ────────────────────────────────────────────────────
 : "${SERVER_NAME:=Life is Feudal Docker Server}"
@@ -193,6 +196,46 @@ fi
 # Docker named volumes may be created as root; ensure lif user can write.
 chown -R lif:lif "${SERVER_DIR}/Logs" "${SERVER_DIR}/config" 2>/dev/null || true
 chown -R lif:lif /home/lif/.wine 2>/dev/null || true
+
+# ── Backup loop (runs in background) ─────────────────────────────────────────
+BACKUP_DIR="/home/lif/backups"
+mkdir -p "${BACKUP_DIR}"
+chown lif:lif "${BACKUP_DIR}"
+
+if [ "${BACKUP_ENABLED}" = "true" ]; then
+    echo "[*] Backups enabled — every ${BACKUP_INTERVAL}s, keeping last ${BACKUP_KEEP}"
+    (
+        while true; do
+            sleep "${BACKUP_INTERVAL}"
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            BACKUP_FILE="${BACKUP_DIR}/lif_backup_${TIMESTAMP}.tar.gz"
+
+            echo "[backup] Starting backup ${TIMESTAMP} ..."
+
+            # Dump database
+            mysqldump -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" \
+                --routines --triggers "${DB_NAME}" > "${BACKUP_DIR}/db_dump.sql" 2>/dev/null
+
+            # Create compressed archive: DB dump + world configs
+            tar czf "${BACKUP_FILE}" \
+                -C "${BACKUP_DIR}" db_dump.sql \
+                -C "${SERVER_DIR}" config/ 2>/dev/null
+
+            rm -f "${BACKUP_DIR}/db_dump.sql"
+
+            # Prune old backups, keeping only the newest BACKUP_KEEP
+            ls -1t "${BACKUP_DIR}"/lif_backup_*.tar.gz 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)) | xargs rm -f 2>/dev/null
+
+            SIZE=$(du -h "${BACKUP_FILE}" 2>/dev/null | cut -f1)
+            COUNT=$(ls -1 "${BACKUP_DIR}"/lif_backup_*.tar.gz 2>/dev/null | wc -l)
+            echo "[backup] Saved ${BACKUP_FILE} (${SIZE}), ${COUNT} backups retained"
+        done
+    ) &
+    BACKUP_PID=$!
+    echo "[*] Backup loop running (PID ${BACKUP_PID})"
+else
+    echo "[*] Backups disabled (BACKUP_ENABLED=false)"
+fi
 
 # ── Launch the server via Wine + Xvfb (as unprivileged user) ─────────────────
 echo "[*] Starting LiF:YO server (World ${WORLD_ID}) ..."

@@ -95,6 +95,11 @@ services:
       JH_SAT:           "${JH_SAT:-0}"
       JH_SUN:           "${JH_SUN:-0}"
 
+      # ── Backups ───────────────────────────────────────────────────────────
+      BACKUP_ENABLED:   "${BACKUP_ENABLED:-true}"
+      BACKUP_INTERVAL:  "${BACKUP_INTERVAL:-3600}"    # seconds between backups
+      BACKUP_KEEP:      "${BACKUP_KEEP:-5}"            # number of backups to retain
+
       # ── Maintenance ──────────────────────────────────────────────────────
       UPDATE_ON_START:  "${UPDATE_ON_START:-false}"
     privileged: true
@@ -111,6 +116,7 @@ services:
       - ./data/config:/home/lif/yoserver/config
       - ./data/logs:/home/lif/yoserver/Logs
       - ./data/wineprefix:/home/lif/.wine
+      - ./data/backups:/home/lif/backups
 
     # ── Docker volumes (alternative) ──────────────────────────────────────
     # Uncomment the lines below (and the volumes: block at the bottom) and
@@ -119,6 +125,7 @@ services:
     #  - lif_config:/home/lif/yoserver/config
     #  - lif_logs:/home/lif/yoserver/Logs
     #  - lif_wineprefix:/home/lif/.wine
+    #  - lif_backups:/home/lif/backups
 
 # ── Named volumes (only needed if using Docker volumes alternative) ──────
 # Uncomment if you switched to Docker-managed volumes above.
@@ -127,3 +134,4 @@ services:
 #  lif_config:
 #  lif_logs:
 #  lif_wineprefix:
+#  lif_backups:

@@ -93,6 +93,11 @@ services:
       JH_SAT:           "${JH_SAT:-0}"
       JH_SUN:           "${JH_SUN:-0}"
 
+      # ── Backups ───────────────────────────────────────────────────────────
+      BACKUP_ENABLED:   "${BACKUP_ENABLED:-true}"
+      BACKUP_INTERVAL:  "${BACKUP_INTERVAL:-3600}"    # seconds between backups
+      BACKUP_KEEP:      "${BACKUP_KEEP:-5}"            # number of backups to retain
+
       # ── Maintenance ──────────────────────────────────────────────────────
       UPDATE_ON_START:  "${UPDATE_ON_START:-false}"
     privileged: true
@@ -107,9 +112,11 @@ services:
       - lif_config:/home/lif/yoserver/config          # Persist world configs
       - lif_logs:/home/lif/yoserver/Logs               # Persist logs
       - lif_wineprefix:/home/lif/.wine                 # Persist Wine prefix (avoid re-init)
+      - lif_backups:/home/lif/backups                   # Hourly backups
 
 volumes:
   mariadb_data:
   lif_config:
   lif_logs:
   lif_wineprefix:
+  lif_backups:
