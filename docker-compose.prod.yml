@@ -1,0 +1,110 @@
+################################################################################
+# Life is Feudal: Your Own — Production Docker Compose
+#
+# Uses the pre-built image from GitHub Container Registry.
+# No need to clone the repo or build locally.
+#
+# Quick start:
+#   1. Copy this file and .env.example to your server
+#   2. cp .env.example .env  &&  edit .env with your settings
+#   3. Download mariadb-custom.cnf from the repo (or copy from below)
+#   4. docker compose -f docker-compose.prod.yml up -d
+################################################################################
+
+services:
+
+  # ── MariaDB ─────────────────────────────────────────────────────────────────
+  mariadb:
+    image: mariadb:10.6
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:-rootChangeme}"
+      MARIADB_DATABASE:      "${DB_NAME:-lif_1}"
+      MARIADB_USER:          "${DB_USER:-lif}"
+      MARIADB_PASSWORD:      "${DB_PASSWORD:-changeme}"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./mariadb-custom.cnf:/etc/mysql/mariadb.conf.d/90-lifeisfeudal.cnf:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # ── Life is Feudal: Your Own ────────────────────────────────────────────────
+  lif-yo:
+    image: ghcr.io/jamesarhy/lifyo-docker:latest
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      # ── Database ──────────────────────────────────────────────────────────
+      DB_HOST:          mariadb
+      DB_PORT:          "3306"
+      DB_USER:          root
+      DB_PASSWORD:      "${DB_ROOT_PASSWORD:-rootChangeme}"
+      DB_NAME:          "${DB_NAME:-lif_1}"
+
+      # ── Server identity ──────────────────────────────────────────────────
+      SERVER_NAME:      "${SERVER_NAME:-Life is Feudal Docker Server}"
+      SERVER_PASSWORD:  "${SERVER_PASSWORD:-}"
+      ADMIN_PASSWORD:   "${ADMIN_PASSWORD:-}"
+      GAME_MODE:        "${GAME_MODE:-Sandbox}"
+      IS_PRIVATE:       "${IS_PRIVATE:-0}"
+      GAME_PORT:        "${GAME_PORT:-28000}"
+      WORLD_ID:         "${WORLD_ID:-1}"
+      MAX_PLAYERS:      "${MAX_PLAYERS:-64}"
+
+      # ── Skills & progression ─────────────────────────────────────────────
+      SKILLS_MULTIPLIER:  "${SKILLS_MULTIPLIER:-10}"
+      CRAFTING_SKILLCAP:  "${CRAFTING_SKILLCAP:-600}"
+      COMBAT_SKILLCAP:    "${COMBAT_SKILLCAP:-400}"
+      MINOR_SKILLCAP:     "${MINOR_SKILLCAP:-400}"
+
+      # ── World simulation ─────────────────────────────────────────────────
+      OBJECT_DECAY_RATE:    "${OBJECT_DECAY_RATE:-0}"
+      TERRAFORMING_SPEED:   "${TERRAFORMING_SPEED:-4}"
+      CRAFTING_PERIOD:      "${CRAFTING_PERIOD:-60}"
+      ANIMAL_BREED_PERIOD:  "${ANIMAL_BREED_PERIOD:-60}"
+      DAY_CYCLE:            "${DAY_CYCLE:-3}"
+      ANIMALS_COUNT:        "${ANIMALS_COUNT:-100}"
+
+      # ── Miscellaneous ───────────────────────────────────────────────────
+      MOVABLE_MAX_DROP_HEIGHT:       "${MOVABLE_MAX_DROP_HEIGHT:-5}"
+      RANDOM_EVENT_CHANCE_WALKING:   "${RANDOM_EVENT_CHANCE_WALKING:-0.03}"
+      RANDOM_EVENT_CHANCE_ABILITY:   "${RANDOM_EVENT_CHANCE_ABILITY:-0.02}"
+      HORSE_DECAY_MINUTES:           "${HORSE_DECAY_MINUTES:-0}"
+      DROP_ON_PRAY:                  "${DROP_ON_PRAY:-0}"
+
+      # ── Judgement Hour (guild warfare window) ────────────────────────────
+      JH_START_TIME:    "${JH_START_TIME:-00:00}"
+      JH_DURATION:      "${JH_DURATION:-0}"
+      JH_MON:           "${JH_MON:-0}"
+      JH_TUE:           "${JH_TUE:-0}"
+      JH_WED:           "${JH_WED:-0}"
+      JH_THU:           "${JH_THU:-0}"
+      JH_FRI:           "${JH_FRI:-0}"
+      JH_SAT:           "${JH_SAT:-0}"
+      JH_SUN:           "${JH_SUN:-0}"
+
+      # ── Maintenance ──────────────────────────────────────────────────────
+      UPDATE_ON_START:  "${UPDATE_ON_START:-false}"
+    privileged: true
+    ports:
+      - "${GAME_PORT:-28000}:${GAME_PORT:-28000}/udp"
+      - "${GAME_PORT:-28000}:${GAME_PORT:-28000}/tcp"
+      - "${GAME_PORT_PLUS1:-28001}:${GAME_PORT_PLUS1:-28001}/udp"
+      - "${GAME_PORT_PLUS1:-28001}:${GAME_PORT_PLUS1:-28001}/tcp"
+      - "${GAME_PORT_PLUS2:-28002}:${GAME_PORT_PLUS2:-28002}/udp"
+      - "${GAME_PORT_PLUS2:-28002}:${GAME_PORT_PLUS2:-28002}/tcp"
+    volumes:
+      - lif_config:/home/lif/yoserver/config
+      - lif_logs:/home/lif/yoserver/Logs
+      - lif_wineprefix:/home/lif/.wine
+
+volumes:
+  mariadb_data:
+  lif_config:
+  lif_logs:
+  lif_wineprefix:
