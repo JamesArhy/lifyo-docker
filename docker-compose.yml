@@ -44,10 +44,11 @@ services:
         condition: service_healthy
     environment:
       # ── Database ──────────────────────────────────────────────────────────
+      # The server needs root-level DB privileges to create/alter tables.
       DB_HOST:          mariadb
       DB_PORT:          "3306"
-      DB_USER:          "${DB_USER:-lif}"
-      DB_PASSWORD:      "${DB_PASSWORD:-changeme}"
+      DB_USER:          root
+      DB_PASSWORD:      "${DB_ROOT_PASSWORD:-rootChangeme}"
       DB_NAME:          "${DB_NAME:-lif_1}"
 
       # ── Server identity ──────────────────────────────────────────────────
@@ -78,12 +79,12 @@ services:
       MOVABLE_MAX_DROP_HEIGHT:       "${MOVABLE_MAX_DROP_HEIGHT:-5}"
       RANDOM_EVENT_CHANCE_WALKING:   "${RANDOM_EVENT_CHANCE_WALKING:-0.03}"
       RANDOM_EVENT_CHANCE_ABILITY:   "${RANDOM_EVENT_CHANCE_ABILITY:-0.02}"
-      HORSE_DECAY:                   "${HORSE_DECAY:-90.00}"    # hours before unattended horses vanish
+      HORSE_DECAY_MINUTES:           "${HORSE_DECAY_MINUTES:-0}"  # 0 = disabled; minutes before unattended horses vanish
       DROP_ON_PRAY:                  "${DROP_ON_PRAY:-0}"       # 1 = drop inventory on homecoming prayer
 
       # ── Judgement Hour (guild warfare window) ────────────────────────────
-      JH_ENABLED:       "${JH_ENABLED:-0}"
-      JH_START_TIME:    "${JH_START_TIME:-18:00}"
+      JH_START_TIME:    "${JH_START_TIME:-00:00}"
+      JH_DURATION:      "${JH_DURATION:-0}"               # duration in real-life minutes (0 = disabled)
       JH_MON:           "${JH_MON:-0}"
       JH_TUE:           "${JH_TUE:-0}"
       JH_WED:           "${JH_WED:-0}"
@@ -94,16 +95,21 @@ services:
 
       # ── Maintenance ──────────────────────────────────────────────────────
       UPDATE_ON_START:  "${UPDATE_ON_START:-false}"
+    privileged: true
     ports:
       - "${GAME_PORT:-28000}:${GAME_PORT:-28000}/udp"
       - "${GAME_PORT:-28000}:${GAME_PORT:-28000}/tcp"
+      - "${GAME_PORT_PLUS1:-28001}:${GAME_PORT_PLUS1:-28001}/udp"
+      - "${GAME_PORT_PLUS1:-28001}:${GAME_PORT_PLUS1:-28001}/tcp"
+      - "${GAME_PORT_PLUS2:-28002}:${GAME_PORT_PLUS2:-28002}/udp"
+      - "${GAME_PORT_PLUS2:-28002}:${GAME_PORT_PLUS2:-28002}/tcp"
     volumes:
       - lif_config:/home/lif/yoserver/config          # Persist world configs
       - lif_logs:/home/lif/yoserver/Logs               # Persist logs
-      - lif_server:/home/lif/yoserver                  # Persist full server (saves, mods, etc.)
+      - lif_wineprefix:/home/lif/.wine                 # Persist Wine prefix (avoid re-init)
 
 volumes:
   mariadb_data:
   lif_config:
   lif_logs:
-  lif_server:
+  lif_wineprefix:

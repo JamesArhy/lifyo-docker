@@ -1,0 +1,19 @@
+# Environment variables (contains passwords)
+.env
+
+# Old/backup files
+*.old
+*.bak
+*.orig
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

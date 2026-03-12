@@ -4,10 +4,23 @@
 [mysqld]
 innodb_file_per_table       = ON
 innodb_file_format          = Barracuda
-innodb_flush_log_at_trx_commit = 1
 max_sp_recursion_depth      = 255
 max_allowed_packet          = 10M
 query_cache_size            = 0
 query_cache_type            = OFF
 character-set-server        = utf8
 collation-server            = utf8_general_ci
+
+# Flush redo log to OS buffer on commit, fsync once/sec. No corruption risk;
+# worst case is losing ~1s of committed transactions on power loss.
+innodb_flush_log_at_trx_commit = 2
+
+# Buffer pool — cache more table/index data in RAM
+innodb_buffer_pool_size     = 256M
+
+# Larger redo log — fewer checkpoints during heavy write bursts
+innodb_log_file_size        = 64M
+
+# Temp table size for stored procedure temp tables
+tmp_table_size              = 32M
+max_heap_table_size         = 32M
