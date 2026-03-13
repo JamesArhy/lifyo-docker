@@ -158,30 +158,95 @@ done
 echo "[*] MariaDB is reachable."
 
 # ── Helper: import SQL file ──────────────────────────────────────────────────
-# Uses mysql's `source` command which handles DELIMITER natively (unlike piped
-# stdin). This avoids fragile DELIMITER preprocessing entirely.
+# The game's SQL files contain CREATE PROCEDURE/FUNCTION with BEGIN...END blocks
+# but explicitly NO DELIMITER statements (patch.sql says "do not use DELIMITER").
+# The mysql CLI needs DELIMITER to parse multi-statement routines, so we
+# preprocess with Python to add them. The preprocessor:
+#   - Detects CREATE PROCEDURE/FUNCTION/TRIGGER (any indentation)
+#   - Tracks BEGIN/END nesting depth to find the outermost END
+#   - Wraps each routine in DELIMITER // ... END // ... DELIMITER ;
+#   - Passes through files that already have DELIMITER statements
 import_sql() {
     local sql_file="$1"
     echo "[*]   Importing ${sql_file} ..."
-
-    # Debug: show file info and first few lines so we can see the format
     echo "[debug] File size: $(wc -c < "${sql_file}") bytes, $(wc -l < "${sql_file}") lines"
-    echo "[debug] First 5 lines:"
-    head -5 "${sql_file}" | sed 's/^/[debug]   /'
-    echo "[debug] DELIMITER lines found: $(grep -ci 'DELIMITER' "${sql_file}" || echo 0)"
     echo "[debug] CREATE PROCEDURE/FUNCTION/TRIGGER count: $(grep -ciE 'CREATE\s+(PROCEDURE|FUNCTION|TRIGGER)' "${sql_file}" || echo 0)"
 
-    # The 'source' command is a mysql client builtin that reads and executes
-    # a file directly, with full DELIMITER support — no preprocessing needed.
-    if ! mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" \
-        "${DB_NAME}" -e "source ${sql_file}" 2>&1 | \
-    while IFS= read -r line; do
-        case "$line" in
-            *ERROR*) echo "[!]   SQL: $line" ;;
+    python3 -c "
+import re, sys
+
+with open(sys.argv[1], 'r', errors='replace') as f:
+    content = f.read()
+
+# If the file already has DELIMITER statements, pass through as-is
+if re.search(r'^\s*DELIMITER\s', content, re.MULTILINE | re.IGNORECASE):
+    print(content)
+    sys.exit(0)
+
+lines = content.split('\n')
+output = []
+in_routine = False
+depth = 0
+routine_lines = []
+
+def flush_routine():
+    # Join all buffered routine lines into one block and emit with DELIMITER
+    global routine_lines
+    output.append('DELIMITER //')
+    for rl in routine_lines:
+        output.append(rl)
+    # The last line should be END; — replace the trailing ; with //
+    if output and re.match(r'\s*END\s*;\s*$', output[-1], re.IGNORECASE):
+        output[-1] = re.sub(r';\s*$', ' //', output[-1])
+    output.append('DELIMITER ;')
+    routine_lines = []
+
+for line in lines:
+    stripped = line.strip()
+    upper = stripped.upper()
+
+    if not in_routine:
+        # Detect start of a routine (handles any whitespace, optional DEFINER)
+        if re.search(r'\bCREATE\s+(PROCEDURE|FUNCTION|TRIGGER)\b', stripped, re.IGNORECASE):
+            in_routine = True
+            depth = 0
+            routine_lines = [line]
+        elif re.match(r'DROP\s+(PROCEDURE|FUNCTION|TRIGGER)\s+', stripped, re.IGNORECASE):
+            # DROP statements before CREATE — emit directly
+            output.append(line)
+        else:
+            output.append(line)
+    else:
+        routine_lines.append(line)
+
+        # Count BEGIN (but not BEGIN inside comments or strings — good enough)
+        if re.match(r'\s*BEGIN\s*$', stripped, re.IGNORECASE):
+            depth += 1
+
+        # Count END variants
+        if re.match(r'\s*END\s+(IF|LOOP|WHILE|CASE|REPEAT)\s*;', stripped, re.IGNORECASE):
+            pass  # these don't affect routine depth
+        elif re.match(r'\s*END\s*;\s*$', stripped, re.IGNORECASE):
+            depth -= 1
+            if depth <= 0:
+                flush_routine()
+                in_routine = False
+                depth = 0
+
+# If we ended mid-routine, flush what we have
+if in_routine and routine_lines:
+    flush_routine()
+
+print('\n'.join(output))
+" "${sql_file}" | \
+    mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" 2>&1 | \
+    while IFS= read -r err_line; do
+        case "$err_line" in
+            *ERROR*) echo "[!]   SQL: $err_line" ;;
         esac
-    done; then
-        echo "[!]   Warning: import failed for ${sql_file}"
-    fi
+    done
+
+    echo "[*]   Done importing ${sql_file}"
 }
 
 # ── Initialize database schema on first run ─────────────────────────────────
