@@ -238,14 +238,22 @@ if in_routine and routine_lines:
     flush_routine()
 
 print('\n'.join(output))
-" "${sql_file}" | \
-    mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" 2>&1 | \
-    while IFS= read -r err_line; do
-        case "$err_line" in
-            *ERROR*) echo "[!]   SQL: $err_line" ;;
-        esac
-    done
+" "${sql_file}" > /tmp/_preprocessed.sql
 
+    local import_errors
+    import_errors=$(mysql --default-character-set=utf8mb3 \
+        -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
+        < /tmp/_preprocessed.sql 2>&1 | grep -i 'ERROR' || true)
+
+    if [ -n "${import_errors}" ]; then
+        echo "[!]   SQL errors during import of ${sql_file}:"
+        echo "${import_errors}" | while IFS= read -r err_line; do
+            echo "[!]   $err_line"
+        done
+        IMPORT_FAILED=1
+    fi
+
+    rm -f /tmp/_preprocessed.sql
     echo "[*]   Done importing ${sql_file}"
 }
 
@@ -262,14 +270,11 @@ if [ "${SCHEMA_IMPORTED}" -eq 1 ] 2>/dev/null; then
     echo "[*] Database schema already imported (${TABLE_COUNT} tables), skipping."
 elif [ "${TABLE_COUNT}" -eq 0 ] 2>/dev/null; then
     echo "[*] Empty database detected — importing schema ..."
+    IMPORT_FAILED=0
     import_sql "${SERVER_DIR}/sql/new.sql"
     import_sql "${SERVER_DIR}/sql/patch.sql"
     import_sql "${SERVER_DIR}/sql/dump.sql"
-    # Mark schema as imported so we don't reimport on restart
-    mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
-        -e "CREATE TABLE IF NOT EXISTS _docker_schema_imported (imported_at DATETIME DEFAULT CURRENT_TIMESTAMP);" 2>/dev/null
-    mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
-        -e "INSERT IGNORE INTO _docker_schema_imported VALUES (NOW());" 2>/dev/null
+
     # Debug: check what was actually created
     POST_TABLES=$(mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" \
         -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}';" 2>/dev/null || echo "0")
@@ -279,15 +284,52 @@ elif [ "${TABLE_COUNT}" -eq 0 ] 2>/dev/null; then
         -N -e "SELECT Value FROM ${DB_NAME}._patch_execute_status LIMIT 1;" 2>/dev/null || echo "TABLE NOT FOUND")
     echo "[debug] Post-import: ${POST_TABLES} tables, ${POST_PROCS} stored procedures"
     echo "[debug] _patch_execute_status value: ${PATCH_STATUS}"
-    echo "[*] Database schema imported."
+
+    if [ "${IMPORT_FAILED}" -eq 1 ]; then
+        echo "[!] SQL import had errors — NOT creating import marker so it will retry on next restart."
+        echo "[!] You may need to drop the database and restart: DROP DATABASE ${DB_NAME}; CREATE DATABASE ${DB_NAME};"
+    else
+        # Mark schema as imported so we don't reimport on restart
+        mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
+            -e "CREATE TABLE IF NOT EXISTS _docker_schema_imported (imported_at DATETIME DEFAULT CURRENT_TIMESTAMP);" 2>/dev/null
+        mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
+            -e "INSERT IGNORE INTO _docker_schema_imported VALUES (NOW());" 2>/dev/null
+        echo "[*] Database schema imported successfully."
+    fi
 else
-    echo "[*] Database has ${TABLE_COUNT} tables but no import marker — assuming pre-existing database."
-    # Create the marker for existing databases so we don't hit this branch again
-    mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
-        -e "CREATE TABLE IF NOT EXISTS _docker_schema_imported (imported_at DATETIME DEFAULT CURRENT_TIMESTAMP);" 2>/dev/null
-    mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
-        -e "INSERT IGNORE INTO _docker_schema_imported VALUES (NOW());" 2>/dev/null
-    echo "[*] Import marker created. Skipping schema import."
+    # Tables exist but no marker — could be a pre-existing database OR a failed partial import.
+    # Check if stored procedures exist (they're created by patch.sql, which was failing before).
+    PROC_COUNT=$(mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" \
+        -N -e "SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA='${DB_NAME}';" 2>/dev/null || echo "0")
+    PATCH_STATUS=$(mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" \
+        -N -e "SELECT Value FROM ${DB_NAME}._patch_execute_status LIMIT 1;" 2>/dev/null || echo "MISSING")
+
+    if [ "${PROC_COUNT}" -gt 0 ] && [ "${PATCH_STATUS}" != "MISSING" ]; then
+        echo "[*] Database has ${TABLE_COUNT} tables, ${PROC_COUNT} procedures — looks healthy."
+        mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
+            -e "CREATE TABLE IF NOT EXISTS _docker_schema_imported (imported_at DATETIME DEFAULT CURRENT_TIMESTAMP);" 2>/dev/null
+        mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
+            -e "INSERT IGNORE INTO _docker_schema_imported VALUES (NOW());" 2>/dev/null
+        echo "[*] Import marker created."
+    else
+        echo "[!] Database has ${TABLE_COUNT} tables but ${PROC_COUNT} procedures and patch status: ${PATCH_STATUS}"
+        echo "[!] This looks like a failed partial import. Dropping and re-importing..."
+        mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" \
+            -e "DROP DATABASE IF EXISTS ${DB_NAME}; CREATE DATABASE ${DB_NAME};" 2>/dev/null
+        IMPORT_FAILED=0
+        import_sql "${SERVER_DIR}/sql/new.sql"
+        import_sql "${SERVER_DIR}/sql/patch.sql"
+        import_sql "${SERVER_DIR}/sql/dump.sql"
+        if [ "${IMPORT_FAILED}" -eq 0 ]; then
+            mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
+                -e "CREATE TABLE IF NOT EXISTS _docker_schema_imported (imported_at DATETIME DEFAULT CURRENT_TIMESTAMP);" 2>/dev/null
+            mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
+                -e "INSERT IGNORE INTO _docker_schema_imported VALUES (NOW());" 2>/dev/null
+            echo "[*] Database re-imported successfully."
+        else
+            echo "[!] Re-import also had errors. Check logs above."
+        fi
+    fi
 fi
 
 # ── Fix volume permissions ────────────────────────────────────────────────────

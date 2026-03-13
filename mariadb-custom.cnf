@@ -8,8 +8,8 @@ max_sp_recursion_depth      = 255
 max_allowed_packet          = 10M
 query_cache_size            = 0
 query_cache_type            = OFF
-character-set-server        = utf8
-collation-server            = utf8_general_ci
+character-set-server        = utf8mb3
+collation-server            = utf8mb3_unicode_ci
 
 # Flush redo log to OS buffer on commit, fsync once/sec. No corruption risk;
 # worst case is losing ~1s of committed transactions on power loss.
