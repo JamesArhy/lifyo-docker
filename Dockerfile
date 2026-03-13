@@ -65,12 +65,16 @@ RUN mkdir -p /home/lif/steamcmd && \
 # ── 6. Download LiF:YO dedicated server (Windows build via SteamCMD) ─────────
 # This is done at build time so the image ships ready to run.
 # To update later, just rebuild or run the steamcmd command in the entrypoint.
-RUN /home/lif/steamcmd/steamcmd.sh \
-        +@sSteamCmdForcePlatformType windows \
-        +force_install_dir /home/lif/yoserver \
-        +login anonymous \
-        +app_update 320850 validate \
-        +quit
+RUN for i in 1 2 3 4 5; do \
+        /home/lif/steamcmd/steamcmd.sh \
+            +@sSteamCmdForcePlatformType windows \
+            +force_install_dir /home/lif/yoserver \
+            +login anonymous \
+            +app_update 320850 validate \
+            +quit \
+        && break \
+        || { echo "SteamCMD attempt $i/5 failed, retrying in 30s..."; sleep 30; }; \
+    done
 
 # ── 7. Copy default configs into place ────────────────────────────────────────
 RUN cp /home/lif/yoserver/docs/config_local.cs /home/lif/yoserver/config_local.cs.template && \

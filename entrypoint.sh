@@ -130,10 +130,13 @@ done
 echo "[*] MariaDB is reachable."
 
 # ── Helper: import SQL with DELIMITER support ────────────────────────────────
-# The shipped SQL files contain CREATE PROCEDURE/FUNCTION with BEGIN...END
-# blocks but no DELIMITER statements. The mysql CLI can't parse these without
-# DELIMITER, so we preprocess: add DELIMITER // before each CREATE PROCEDURE/
-# FUNCTION and replace the closing END; with END //.
+# The shipped SQL files contain CREATE PROCEDURE/FUNCTION/TRIGGER with
+# BEGIN...END blocks but no DELIMITER statements. The mysql CLI can't parse
+# these without DELIMITER, so we preprocess with a Python script that:
+#   - Handles PROCEDURE, FUNCTION, and TRIGGER statements
+#   - Matches regardless of leading whitespace
+#   - Tracks BEGIN...END nesting depth to find the correct closing END
+#   - Passes through files that already contain DELIMITER statements
 import_sql_with_delimiters() {
     local sql_file="$1"
     echo "[*]   Importing ${sql_file} (with DELIMITER preprocessing) ..."
@@ -142,54 +145,100 @@ import_sql_with_delimiters() {
 import re, sys
 
 with open(sys.argv[1], 'r') as f:
-    lines = f.read().split('\n')
+    content = f.read()
 
+# If the file already has DELIMITER statements, pass it through as-is
+if re.search(r'^\s*DELIMITER\s', content, re.MULTILINE | re.IGNORECASE):
+    print(content)
+    sys.exit(0)
+
+lines = content.split('\n')
 output = []
 in_routine = False
+depth = 0
 
 for line in lines:
-    # CREATE PROCEDURE/FUNCTION at column 0 starts a routine
-    if not in_routine and re.match(r'^CREATE\s+(PROCEDURE|FUNCTION)\s+', line, re.IGNORECASE):
-        output.append('DELIMITER //')
-        in_routine = True
-        output.append(line)
-    # END; at column 0 (with optional comment) ends a routine
-    elif in_routine and re.match(r'^END;\s*(/\*.*\*/)?\s*$', line):
-        out = re.sub(r';(\s*(/\*.*\*/)?\s*)$', r'//\1', line.rstrip())
-        output.append(out)
-        output.append('DELIMITER ;')
-        in_routine = False
+    stripped = line.strip()
+    upper = stripped.upper()
+
+    if not in_routine:
+        # Match CREATE [DEFINER=...] PROCEDURE|FUNCTION|TRIGGER (with optional whitespace)
+        if re.match(r'CREATE\s+', stripped, re.IGNORECASE) and \
+           re.search(r'\b(PROCEDURE|FUNCTION|TRIGGER)\b', stripped, re.IGNORECASE):
+            output.append('DELIMITER //')
+            in_routine = True
+            depth = 0
+            output.append(line)
+        else:
+            output.append(line)
     else:
-        output.append(line)
+        # Track BEGIN...END nesting: count standalone BEGIN keywords
+        # Match 'BEGIN' as a full word at the start or end of a statement
+        begin_count = len(re.findall(r'\bBEGIN\b', upper))
+        # Count END keywords that close blocks: END;  END IF;  END LOOP;  END WHILE; etc.
+        end_count = len(re.findall(r'\bEND\s*(IF|LOOP|WHILE|CASE|REPEAT)?\s*;', upper))
+
+        depth += begin_count
+        depth -= end_count
+
+        # The outermost END of the routine: depth hits 0 and line is just END;
+        if depth <= 0 and re.match(r'END\s*;', stripped, re.IGNORECASE):
+            # Replace trailing ; with // to use our custom delimiter
+            out = re.sub(r';\s*$', '//', stripped)
+            output.append(out)
+            output.append('DELIMITER ;')
+            in_routine = False
+            depth = 0
+        else:
+            output.append(line)
 
 print('\n'.join(output))
 " "${sql_file}" | \
-    mysql --force -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}"
+    mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" 2>&1 | \
+    while IFS= read -r line; do
+        # Show errors but don't flood logs with every INSERT
+        case "$line" in
+            *ERROR*) echo "[!]   SQL: $line" ;;
+        esac
+    done
+
+    # Use PIPESTATUS to check the mysql exit code (element 1 of the pipeline)
+    local mysql_exit=${PIPESTATUS[1]:-0}
+    if [ "${mysql_exit}" -ne 0 ]; then
+        echo "[!]   Warning: mysql exited with code ${mysql_exit} for ${sql_file}"
+    fi
 }
 
 # ── Initialize database schema on first run ─────────────────────────────────
-# Check both table count AND stored procedure count. The server needs stored
-# procedures from patch.sql to function (e.g., CmServerInfoManager uses them).
+# Use a marker table to track whether the schema has been imported. This avoids
+# reimporting on every restart (which causes duplicate data and crash loops).
+SCHEMA_IMPORTED=$(mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" \
+    -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}' AND table_name='_docker_schema_imported';" 2>/dev/null || echo "0")
+
 TABLE_COUNT=$(mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" \
     -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}';" 2>/dev/null || echo "0")
 
-PROC_COUNT=$(mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" \
-    -N -e "SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA='${DB_NAME}';" 2>/dev/null || echo "0")
-
-if [ "${TABLE_COUNT}" -eq 0 ] 2>/dev/null; then
+if [ "${SCHEMA_IMPORTED}" -eq 1 ] 2>/dev/null; then
+    echo "[*] Database schema already imported (${TABLE_COUNT} tables), skipping."
+elif [ "${TABLE_COUNT}" -eq 0 ] 2>/dev/null; then
     echo "[*] Empty database detected — importing schema ..."
     import_sql_with_delimiters "${SERVER_DIR}/sql/new.sql"
     import_sql_with_delimiters "${SERVER_DIR}/sql/patch.sql"
     import_sql_with_delimiters "${SERVER_DIR}/sql/dump.sql"
+    # Mark schema as imported so we don't reimport on restart
+    mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
+        -e "CREATE TABLE IF NOT EXISTS _docker_schema_imported (imported_at DATETIME DEFAULT CURRENT_TIMESTAMP);" 2>/dev/null
+    mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
+        -e "INSERT IGNORE INTO _docker_schema_imported VALUES (NOW());" 2>/dev/null
     echo "[*] Database schema imported."
-elif [ "${PROC_COUNT}" -lt 50 ] 2>/dev/null; then
-    echo "[*] Database has ${TABLE_COUNT} tables but only ${PROC_COUNT} stored procedures — reimporting ..."
-    import_sql_with_delimiters "${SERVER_DIR}/sql/new.sql"
-    import_sql_with_delimiters "${SERVER_DIR}/sql/patch.sql"
-    import_sql_with_delimiters "${SERVER_DIR}/sql/dump.sql"
-    echo "[*] Schema reimport complete."
 else
-    echo "[*] Database has ${TABLE_COUNT} tables and ${PROC_COUNT} stored procedures, skipping import."
+    echo "[*] Database has ${TABLE_COUNT} tables but no import marker — assuming pre-existing database."
+    # Create the marker for existing databases so we don't hit this branch again
+    mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
+        -e "CREATE TABLE IF NOT EXISTS _docker_schema_imported (imported_at DATETIME DEFAULT CURRENT_TIMESTAMP);" 2>/dev/null
+    mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
+        -e "INSERT IGNORE INTO _docker_schema_imported VALUES (NOW());" 2>/dev/null
+    echo "[*] Import marker created. Skipping schema import."
 fi
 
 # ── Fix volume permissions ────────────────────────────────────────────────────
@@ -289,12 +338,8 @@ fi
 
 cd /home/lif/yoserver
 
-echo "[*] config_local.cs contents:"
-cat config_local.cs 2>/dev/null || echo "[!] config_local.cs NOT FOUND"
-echo ""
-echo "[*] config/world_WORLD_ID_PLACEHOLDER.xml contents:"
-cat config/world_WORLD_ID_PLACEHOLDER.xml 2>/dev/null || echo "[!] world config NOT FOUND"
-echo ""
+echo "[*] config_local.cs exists: $(test -f config_local.cs && echo 'yes' || echo 'NO')"
+echo "[*] config/world_WORLD_ID_PLACEHOLDER.xml exists: $(test -f config/world_WORLD_ID_PLACEHOLDER.xml && echo 'yes' || echo 'NO')"
 
 echo "[*] Launching ddctd_cm_yo_server.exe -worldid WORLD_ID_PLACEHOLDER ..."
 wine ddctd_cm_yo_server.exe -worldid WORLD_ID_PLACEHOLDER
