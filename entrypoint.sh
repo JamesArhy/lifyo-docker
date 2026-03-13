@@ -129,83 +129,30 @@ until su - lif -c "bash -c 'echo > /dev/tcp/${DB_HOST}/${DB_PORT}'" 2>/dev/null;
 done
 echo "[*] MariaDB is reachable."
 
-# ── Helper: import SQL with DELIMITER support ────────────────────────────────
-# The shipped SQL files contain CREATE PROCEDURE/FUNCTION/TRIGGER with
-# BEGIN...END blocks but no DELIMITER statements. The mysql CLI can't parse
-# these without DELIMITER, so we preprocess with a Python script that:
-#   - Handles PROCEDURE, FUNCTION, and TRIGGER statements
-#   - Matches regardless of leading whitespace
-#   - Tracks BEGIN...END nesting depth to find the correct closing END
-#   - Passes through files that already contain DELIMITER statements
-import_sql_with_delimiters() {
+# ── Helper: import SQL file ──────────────────────────────────────────────────
+# Uses mysql's `source` command which handles DELIMITER natively (unlike piped
+# stdin). This avoids fragile DELIMITER preprocessing entirely.
+import_sql() {
     local sql_file="$1"
-    echo "[*]   Importing ${sql_file} (with DELIMITER preprocessing) ..."
+    echo "[*]   Importing ${sql_file} ..."
 
-    python3 -c "
-import re, sys
+    # Debug: show file info and first few lines so we can see the format
+    echo "[debug] File size: $(wc -c < "${sql_file}") bytes, $(wc -l < "${sql_file}") lines"
+    echo "[debug] First 5 lines:"
+    head -5 "${sql_file}" | sed 's/^/[debug]   /'
+    echo "[debug] DELIMITER lines found: $(grep -ci 'DELIMITER' "${sql_file}" || echo 0)"
+    echo "[debug] CREATE PROCEDURE/FUNCTION/TRIGGER count: $(grep -ciE 'CREATE\s+(PROCEDURE|FUNCTION|TRIGGER)' "${sql_file}" || echo 0)"
 
-with open(sys.argv[1], 'r') as f:
-    content = f.read()
-
-# If the file already has DELIMITER statements, pass it through as-is
-if re.search(r'^\s*DELIMITER\s', content, re.MULTILINE | re.IGNORECASE):
-    print(content)
-    sys.exit(0)
-
-lines = content.split('\n')
-output = []
-in_routine = False
-depth = 0
-
-for line in lines:
-    stripped = line.strip()
-    upper = stripped.upper()
-
-    if not in_routine:
-        # Match CREATE [DEFINER=...] PROCEDURE|FUNCTION|TRIGGER (with optional whitespace)
-        if re.match(r'CREATE\s+', stripped, re.IGNORECASE) and \
-           re.search(r'\b(PROCEDURE|FUNCTION|TRIGGER)\b', stripped, re.IGNORECASE):
-            output.append('DELIMITER //')
-            in_routine = True
-            depth = 0
-            output.append(line)
-        else:
-            output.append(line)
-    else:
-        # Track BEGIN...END nesting: count standalone BEGIN keywords
-        # Match 'BEGIN' as a full word at the start or end of a statement
-        begin_count = len(re.findall(r'\bBEGIN\b', upper))
-        # Count END keywords that close blocks: END;  END IF;  END LOOP;  END WHILE; etc.
-        end_count = len(re.findall(r'\bEND\s*(IF|LOOP|WHILE|CASE|REPEAT)?\s*;', upper))
-
-        depth += begin_count
-        depth -= end_count
-
-        # The outermost END of the routine: depth hits 0 and line is just END;
-        if depth <= 0 and re.match(r'END\s*;', stripped, re.IGNORECASE):
-            # Replace trailing ; with // to use our custom delimiter
-            out = re.sub(r';\s*$', '//', stripped)
-            output.append(out)
-            output.append('DELIMITER ;')
-            in_routine = False
-            depth = 0
-        else:
-            output.append(line)
-
-print('\n'.join(output))
-" "${sql_file}" | \
-    mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" 2>&1 | \
+    # The 'source' command is a mysql client builtin that reads and executes
+    # a file directly, with full DELIMITER support — no preprocessing needed.
+    if ! mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" \
+        "${DB_NAME}" -e "source ${sql_file}" 2>&1 | \
     while IFS= read -r line; do
-        # Show errors but don't flood logs with every INSERT
         case "$line" in
             *ERROR*) echo "[!]   SQL: $line" ;;
         esac
-    done
-
-    # Use PIPESTATUS to check the mysql exit code (element 1 of the pipeline)
-    local mysql_exit=${PIPESTATUS[1]:-0}
-    if [ "${mysql_exit}" -ne 0 ]; then
-        echo "[!]   Warning: mysql exited with code ${mysql_exit} for ${sql_file}"
+    done; then
+        echo "[!]   Warning: import failed for ${sql_file}"
     fi
 }
 
@@ -222,14 +169,23 @@ if [ "${SCHEMA_IMPORTED}" -eq 1 ] 2>/dev/null; then
     echo "[*] Database schema already imported (${TABLE_COUNT} tables), skipping."
 elif [ "${TABLE_COUNT}" -eq 0 ] 2>/dev/null; then
     echo "[*] Empty database detected — importing schema ..."
-    import_sql_with_delimiters "${SERVER_DIR}/sql/new.sql"
-    import_sql_with_delimiters "${SERVER_DIR}/sql/patch.sql"
-    import_sql_with_delimiters "${SERVER_DIR}/sql/dump.sql"
+    import_sql "${SERVER_DIR}/sql/new.sql"
+    import_sql "${SERVER_DIR}/sql/patch.sql"
+    import_sql "${SERVER_DIR}/sql/dump.sql"
     # Mark schema as imported so we don't reimport on restart
     mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
         -e "CREATE TABLE IF NOT EXISTS _docker_schema_imported (imported_at DATETIME DEFAULT CURRENT_TIMESTAMP);" 2>/dev/null
     mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
         -e "INSERT IGNORE INTO _docker_schema_imported VALUES (NOW());" 2>/dev/null
+    # Debug: check what was actually created
+    POST_TABLES=$(mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" \
+        -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}';" 2>/dev/null || echo "0")
+    POST_PROCS=$(mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" \
+        -N -e "SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA='${DB_NAME}';" 2>/dev/null || echo "0")
+    PATCH_STATUS=$(mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" \
+        -N -e "SELECT Value FROM ${DB_NAME}._patch_execute_status LIMIT 1;" 2>/dev/null || echo "TABLE NOT FOUND")
+    echo "[debug] Post-import: ${POST_TABLES} tables, ${POST_PROCS} stored procedures"
+    echo "[debug] _patch_execute_status value: ${PATCH_STATUS}"
     echo "[*] Database schema imported."
 else
     echo "[*] Database has ${TABLE_COUNT} tables but no import marker — assuming pre-existing database."
@@ -358,6 +314,13 @@ if [ -n "${LATEST_LOG:-}" ] && [ -f "$LATEST_LOG" ]; then
     echo ""
 fi
 
+# Keep container alive for 10 minutes after crash so logs can be read in Portainer
+# TODO: Remove this sleep after debugging is complete
+if [ $EXIT_CODE -ne 0 ]; then
+    echo "[debug] Server crashed — keeping container alive for 10 minutes for log inspection."
+    echo "[debug] You can exec into this container from Portainer during this window."
+    sleep 600
+fi
 exit $EXIT_CODE
 LAUNCHER
 
