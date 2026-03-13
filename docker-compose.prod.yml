@@ -17,21 +17,24 @@ services:
   mariadb:
     image: mariadb:10.6
     restart: unless-stopped
+    command: >
+      --character-set-server=utf8mb3
+      --collation-server=utf8mb3_unicode_ci
+      --innodb-file-per-table=ON
+      --max-sp-recursion-depth=255
+      --max-allowed-packet=10M
+      --innodb-flush-log-at-trx-commit=2
+      --innodb-buffer-pool-size=256M
+      --innodb-log-file-size=64M
+      --tmp-table-size=32M
+      --max-heap-table-size=32M
     environment:
       MARIADB_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:-rootChangeme}"
       MARIADB_DATABASE:      "${DB_NAME:-lif_1}"
       MARIADB_USER:          "${DB_USER:-lif}"
       MARIADB_PASSWORD:      "${DB_PASSWORD:-changeme}"
-    # ── Bind mounts (default) ─────────────────────────────────────────────
     volumes:
       - ./data/mariadb:/var/lib/mysql
-      - ./mariadb-custom.cnf:/etc/mysql/mariadb.conf.d/90-lifeisfeudal.cnf:ro
-    # ── Docker volumes (alternative) ──────────────────────────────────────
-    # Uncomment below (and the volumes: block at the bottom) and comment
-    # out the bind mount above if you prefer Docker-managed volumes.
-    #volumes:
-    #  - mariadb_data:/var/lib/mysql
-    #  - ./mariadb-custom.cnf:/etc/mysql/mariadb.conf.d/90-lifeisfeudal.cnf:ro
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s

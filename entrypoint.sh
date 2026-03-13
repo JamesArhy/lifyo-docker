@@ -240,6 +240,10 @@ if in_routine and routine_lines:
 print('\n'.join(output))
 " "${sql_file}" > /tmp/_preprocessed.sql
 
+    # Normalize any explicit utf8mb4 references to utf8mb3 — the game only needs
+    # 3-byte UTF-8 and MariaDB 10.6 rejects mixing utf8mb4 charset with utf8mb3 collations.
+    sed -i 's/utf8mb4/utf8mb3/g' /tmp/_preprocessed.sql
+
     local import_errors
     import_errors=$(mysql --default-character-set=utf8mb3 \
         -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
@@ -431,6 +435,8 @@ cd /home/lif/yoserver
 
 echo "[*] config_local.cs exists: $(test -f config_local.cs && echo 'yes' || echo 'NO')"
 echo "[*] config/world_WORLD_ID_PLACEHOLDER.xml exists: $(test -f config/world_WORLD_ID_PLACEHOLDER.xml && echo 'yes' || echo 'NO')"
+echo "[debug] config/ directory listing:"
+ls -la config/ 2>/dev/null || echo "[debug] config/ directory does not exist"
 
 echo "[*] Launching ddctd_cm_yo_server.exe -worldid WORLD_ID_PLACEHOLDER ..."
 wine ddctd_cm_yo_server.exe -worldid WORLD_ID_PLACEHOLDER
