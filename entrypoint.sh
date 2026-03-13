@@ -67,6 +67,11 @@ set -euo pipefail
 
 SERVER_DIR="/home/lif/yoserver"
 STEAMCMD="/home/lif/steamcmd/steamcmd.sh"
+TEMPLATE_DIR="/opt/lif-templates"
+
+# Ensure server directory structure exists (may be an empty volume mount)
+mkdir -p "${SERVER_DIR}/config" "${SERVER_DIR}/Logs"
+chown -R lif:lif "${SERVER_DIR}"
 
 echo "========================================="
 echo "  Life is Feudal: Your Own — Docker"
@@ -80,21 +85,44 @@ echo "  Skills mult : ${SKILLS_MULTIPLIER}x"
 echo "  Game mode   : ${GAME_MODE}"
 echo ""
 
-# ── Optional: update server files on start ────────────────────────────────────
-if [ "${UPDATE_ON_START}" = "true" ]; then
-    echo "[*] Updating game server via SteamCMD ..."
-    su - lif -c "${STEAMCMD} \
-        +@sSteamCmdForcePlatformType windows \
-        +force_install_dir ${SERVER_DIR} \
-        +login anonymous \
-        +app_update 320850 validate \
-        +quit"
+# ── Download / update game server via SteamCMD ────────────────────────────────
+# On first run the server binary won't exist yet — download it.
+# On subsequent runs, only update if UPDATE_ON_START=true.
+GAME_EXE="${SERVER_DIR}/ddctd_cm_yo_server.exe"
+
+if [ ! -f "${GAME_EXE}" ] || [ "${UPDATE_ON_START}" = "true" ]; then
+    if [ ! -f "${GAME_EXE}" ]; then
+        echo "[*] First run — downloading game server via SteamCMD (this takes a few minutes) ..."
+    else
+        echo "[*] Updating game server via SteamCMD ..."
+    fi
+
+    for i in 1 2 3 4 5; do
+        su - lif -c "${STEAMCMD} \
+            +@sSteamCmdForcePlatformType windows \
+            +force_install_dir ${SERVER_DIR} \
+            +login anonymous \
+            +app_update 320850 validate \
+            +quit" && break \
+        || { echo "[!] SteamCMD attempt $i/5 failed, retrying in 30s..."; sleep 30; }
+    done
+
+    if [ ! -f "${GAME_EXE}" ]; then
+        echo "[!] FATAL: Game server binary not found after SteamCMD download. Exiting."
+        exit 1
+    fi
+
+    # Copy default config templates from the game's docs on first download
+    if [ ! -f "${SERVER_DIR}/config_local.cs.bak" ]; then
+        cp "${SERVER_DIR}/docs/config_local.cs" "${SERVER_DIR}/config_local.cs.bak" 2>/dev/null || true
+    fi
+    echo "[*] Game server ready."
 fi
 
 # ── Generate config_local.cs from environment variables ───────────────────────
 echo "[*] Generating config_local.cs ..."
 export DB_HOST DB_PORT DB_USER DB_PASSWORD DB_NAME
-envsubst '${DB_HOST} ${DB_USER} ${DB_PASSWORD}' < "${SERVER_DIR}/config_local.cs.template" > "${SERVER_DIR}/config_local.cs"
+envsubst '${DB_HOST} ${DB_USER} ${DB_PASSWORD}' < "${TEMPLATE_DIR}/config_local.cs.template" > "${SERVER_DIR}/config_local.cs"
 chown lif:lif "${SERVER_DIR}/config_local.cs"
 
 # ── Generate world_N.xml from environment variables ───────────────────────────
@@ -110,7 +138,7 @@ export MOVABLE_MAX_DROP_HEIGHT RANDOM_EVENT_CHANCE_WALKING RANDOM_EVENT_CHANCE_A
 export HORSE_DECAY_MINUTES DROP_ON_PRAY
 export JH_ENABLED JH_START_TIME JH_MON JH_TUE JH_WED JH_THU JH_FRI JH_SAT JH_SUN JH_DURATION
 
-envsubst < "${SERVER_DIR}/world_1.xml.template" > "${WORLD_CONFIG}"
+envsubst < "${TEMPLATE_DIR}/world_1.xml.template" > "${WORLD_CONFIG}"
 chown lif:lif "${WORLD_CONFIG}"
 
 echo "[*] Config files generated."

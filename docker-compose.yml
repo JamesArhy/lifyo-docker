@@ -109,14 +109,12 @@ services:
       - "${GAME_PORT_PLUS2:-28002}:${GAME_PORT_PLUS2:-28002}/udp"
       - "${GAME_PORT_PLUS2:-28002}:${GAME_PORT_PLUS2:-28002}/tcp"
     volumes:
-      - lif_config:/home/lif/yoserver/config          # Persist world configs
-      - lif_logs:/home/lif/yoserver/Logs               # Persist logs
+      - lif_server:/home/lif/yoserver                  # Game server files (downloaded on first run)
       - lif_wineprefix:/home/lif/.wine                 # Persist Wine prefix (avoid re-init)
       - lif_backups:/home/lif/backups                   # Hourly backups
 
 volumes:
   mariadb_data:
-  lif_config:
-  lif_logs:
+  lif_server:
   lif_wineprefix:
   lif_backups:

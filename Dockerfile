@@ -62,44 +62,27 @@ RUN mkdir -p /home/lif/steamcmd && \
     curl -sqL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \
         | tar xzf - -C /home/lif/steamcmd
 
-# ── 6. Download LiF:YO dedicated server (Windows build via SteamCMD) ─────────
-# This is done at build time so the image ships ready to run.
-# To update later, just rebuild or run the steamcmd command in the entrypoint.
-RUN for i in 1 2 3 4 5; do \
-        /home/lif/steamcmd/steamcmd.sh \
-            +@sSteamCmdForcePlatformType windows \
-            +force_install_dir /home/lif/yoserver \
-            +login anonymous \
-            +app_update 320850 validate \
-            +quit \
-        && break \
-        || { echo "SteamCMD attempt $i/5 failed, retrying in 30s..."; sleep 30; }; \
-    done
+# ── 6. Create server directory ────────────────────────────────────────────────
+# Game files are downloaded on first run via SteamCMD, not at build time.
+# This keeps the image small (~450MB vs ~1.6GB) at the cost of a longer first start.
+RUN mkdir -p /home/lif/yoserver/config /home/lif/yoserver/Logs
 
-# ── 7. Copy default configs into place ────────────────────────────────────────
-RUN cp /home/lif/yoserver/docs/config_local.cs /home/lif/yoserver/config_local.cs.template && \
-    cp /home/lif/yoserver/docs/default_world_config.xml /home/lif/yoserver/config/world_1.xml
-
-# ── 8. Back to root so entrypoint can do setup, then drop privileges ──────────
+# ── 7. Back to root so entrypoint can do setup, then drop privileges ──────────
 USER root
 
-# ── 9. Copy entrypoint & config templates ─────────────────────────────────────
+# ── 8. Copy entrypoint & config templates ─────────────────────────────────────
+# Templates go to /opt/lif-templates/ (not /home/lif/yoserver/) because the
+# yoserver directory is volume-mounted at runtime and would hide these files.
 COPY entrypoint.sh /entrypoint.sh
-COPY config_local.cs.template /home/lif/yoserver/config_local.cs.template
-COPY world_1.xml.template /home/lif/yoserver/world_1.xml.template
-RUN chmod +x /entrypoint.sh && chown -R lif:lif /home/lif
+COPY config_local.cs.template /opt/lif-templates/config_local.cs.template
+COPY world_1.xml.template /opt/lif-templates/world_1.xml.template
+RUN chmod +x /entrypoint.sh && chown -R lif:lif /home/lif /opt/lif-templates
 
-# ── 10. Ports ─────────────────────────────────────────────────────────────────
+# ── 9. Ports ──────────────────────────────────────────────────────────────────
 #   28000     — Game traffic (default)
 #   28001/2   — Steam query + additional game traffic
 EXPOSE 28000/udp 28000/tcp 28001/udp 28001/tcp 28002/udp 28002/tcp
 
-# ── 11. Volumes ───────────────────────────────────────────────────────────────
-#   /home/lif/yoserver/config   — world_*.xml configs (mount to customise)
-#   /home/lif/yoserver/Logs     — server logs
-VOLUME ["/home/lif/yoserver/config", "/home/lif/yoserver/Logs"]
-
-# ── 12. Go ────────────────────────────────────────────────────────────────────
+# ── 10. Go ────────────────────────────────────────────────────────────────────
 # tini as PID 1 ensures proper signal handling and zombie reaping.
-# xvfb-run provides a virtual display so Wine doesn't hang.
 ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]

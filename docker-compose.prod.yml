@@ -112,9 +112,9 @@ services:
       - "${GAME_PORT_PLUS2:-28002}:${GAME_PORT_PLUS2:-28002}/tcp"
     # ── Bind mounts (default) ─────────────────────────────────────────────
     # Data stored in ./data/ on the host. Easy to back up and inspect.
+    # The server/ mount persists game files downloaded on first run (~1.2GB).
     volumes:
-      - ./data/config:/home/lif/yoserver/config
-      - ./data/logs:/home/lif/yoserver/Logs
+      - ./data/server:/home/lif/yoserver
       - ./data/wineprefix:/home/lif/.wine
       - ./data/backups:/home/lif/backups
 
@@ -122,8 +122,7 @@ services:
     # Uncomment the lines below (and the volumes: block at the bottom) and
     # comment out the bind mounts above if you prefer Docker-managed volumes.
     #volumes:
-    #  - lif_config:/home/lif/yoserver/config
-    #  - lif_logs:/home/lif/yoserver/Logs
+    #  - lif_server:/home/lif/yoserver
     #  - lif_wineprefix:/home/lif/.wine
     #  - lif_backups:/home/lif/backups
 
@@ -131,7 +130,6 @@ services:
 # Uncomment if you switched to Docker-managed volumes above.
 #volumes:
 #  mariadb_data:
-#  lif_config:
-#  lif_logs:
+#  lif_server:
 #  lif_wineprefix:
 #  lif_backups:

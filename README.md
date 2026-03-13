@@ -248,13 +248,12 @@ cp /tmp/restore/config/* data/config/
 By default (`docker-compose.prod.yml`), all persistent data is stored in
 `./data/` on the host via bind mounts:
 
-| Path                 | Contents                                                    |
-|----------------------|-------------------------------------------------------------|
-| `./data/mariadb/`    | MariaDB data files (character data, world state)            |
-| `./data/config/`     | World XML configs                                           |
-| `./data/logs/`       | Server log files                                            |
-| `./data/wineprefix/` | Wine prefix (can be recreated, but saves ~2 min on startup) |
-| `./data/backups/`    | Automatic backup archives                                   |
+| Path                 | Contents                                                        |
+|----------------------|-----------------------------------------------------------------|
+| `./data/mariadb/`    | MariaDB data files (character data, world state)                |
+| `./data/server/`     | Game server files (downloaded on first run via SteamCMD, ~1.2GB)|
+| `./data/wineprefix/` | Wine prefix (can be recreated, but saves ~2 min on startup)     |
+| `./data/backups/`    | Automatic backup archives                                       |
 
 If you're building locally (`docker-compose.yml`), data is in Docker-managed
 named volumes instead.
@@ -291,8 +290,9 @@ Make sure you're editing `.env` (not the XML directly inside the container) and
 restarting with `docker compose restart lif-yo`.
 
 **First startup is slow / high CPU** — This is normal. On first run the server
-initializes the Wine prefix, imports SQL schema (tables + stored procedures),
-and generates the game world. Subsequent starts are much faster.
+downloads game files via SteamCMD (~1.2GB), initializes the Wine prefix,
+imports SQL schema (tables + stored procedures), and generates the game world.
+Subsequent starts are much faster since everything is persisted in volumes.
 
 ## Files
 
