@@ -119,6 +119,61 @@ if [ ! -f "${GAME_EXE}" ] || [ "${UPDATE_ON_START}" = "true" ]; then
     echo "[*] Game server ready."
 fi
 
+# ── Ensure steamclient.so is available for Steam authentication ──────────
+# The game server's steam_api64.dll (running under Wine) needs the native
+# Linux steamclient.so to initialize the Steamworks API and validate player
+# authentication tickets. Without it, players get CR_STEAM_INVALID_TICKET.
+STEAM_SDK64="/home/lif/.steam/sdk64"
+STEAMCLIENT_SO="${STEAM_SDK64}/steamclient.so"
+
+if [ ! -f "${STEAMCLIENT_SO}" ]; then
+    echo "[*] Setting up steamclient.so for Steam authentication ..."
+
+    # Check if SteamCMD already has it from the game download
+    if [ -f "/home/lif/steamcmd/linux64/steamclient.so" ]; then
+        echo "[*] Found steamclient.so in SteamCMD linux64/, creating symlink ..."
+        mkdir -p "${STEAM_SDK64}"
+        ln -sf /home/lif/steamcmd/linux64/steamclient.so "${STEAMCLIENT_SO}"
+    else
+        # Download Steamworks SDK Redistributable (AppID 1007) — tiny download
+        echo "[*] Downloading Steamworks SDK Redist (AppID 1007) for steamclient.so ..."
+        su - lif -c "${STEAMCMD} \
+            +force_install_dir /home/lif/steamworks_sdk \
+            +login anonymous \
+            +app_update 1007 validate \
+            +quit" || true
+
+        mkdir -p "${STEAM_SDK64}"
+        if [ -f "/home/lif/steamworks_sdk/linux64/steamclient.so" ]; then
+            cp /home/lif/steamworks_sdk/linux64/steamclient.so "${STEAMCLIENT_SO}"
+            echo "[*] steamclient.so installed from Steamworks SDK Redist."
+        elif [ -f "/home/lif/steamcmd/linux64/steamclient.so" ]; then
+            # SteamCMD may have populated its own copy after running
+            ln -sf /home/lif/steamcmd/linux64/steamclient.so "${STEAMCLIENT_SO}"
+            echo "[*] steamclient.so symlinked from SteamCMD (appeared after SDK download)."
+        else
+            echo "[!] WARNING: steamclient.so not found after SDK download."
+            echo "[!] Players will get CR_STEAM_INVALID_TICKET errors."
+            echo "[!] Searching for any steamclient.so on the system ..."
+            FOUND_SO=$(find /home/lif -name "steamclient.so" -type f 2>/dev/null | head -1)
+            if [ -n "${FOUND_SO}" ]; then
+                echo "[*] Found steamclient.so at ${FOUND_SO}, copying ..."
+                cp "${FOUND_SO}" "${STEAMCLIENT_SO}"
+            fi
+        fi
+    fi
+
+    # Also set up 32-bit variant (some Steam internals check both)
+    mkdir -p /home/lif/.steam/sdk32
+    if [ -f "/home/lif/steamcmd/linux32/steamclient.so" ] && [ ! -f "/home/lif/.steam/sdk32/steamclient.so" ]; then
+        ln -sf /home/lif/steamcmd/linux32/steamclient.so /home/lif/.steam/sdk32/steamclient.so
+    fi
+
+    chown -R lif:lif /home/lif/.steam
+else
+    echo "[*] steamclient.so already present at ${STEAMCLIENT_SO}"
+fi
+
 # ── Generate config_local.cs from environment variables ───────────────────────
 echo "[*] Generating config_local.cs ..."
 export DB_HOST DB_PORT DB_USER DB_PASSWORD DB_NAME
@@ -203,31 +258,35 @@ def flush_routine():
 
 for line in lines:
     stripped = line.strip()
-    upper = stripped.upper()
 
     if not in_routine:
-        # Detect start of a routine (handles any whitespace, optional DEFINER)
         if re.search(r'\bCREATE\s+(PROCEDURE|FUNCTION|TRIGGER)\b', stripped, re.IGNORECASE):
             in_routine = True
             depth = 0
             routine_lines = [line]
+            # BEGIN may be on the same line as CREATE (e.g. after closing paren)
+            if re.search(r'\bBEGIN\b', stripped, re.IGNORECASE):
+                depth += 1
         elif re.match(r'DROP\s+(PROCEDURE|FUNCTION|TRIGGER)\s+', stripped, re.IGNORECASE):
-            # DROP statements before CREATE — emit directly
             output.append(line)
         else:
             output.append(line)
     else:
         routine_lines.append(line)
 
-        # Count BEGIN (but not BEGIN inside comments or strings — good enough)
-        if re.match(r'\s*BEGIN\s*$', stripped, re.IGNORECASE):
-            depth += 1
+        # Count all BEGIN keywords on this line (but skip 'BEGIN' after CREATE on first line)
+        begin_count = len(re.findall(r'\bBEGIN\b', stripped, re.IGNORECASE))
+        if begin_count > 0:
+            depth += begin_count
 
-        # Count END variants
-        if re.match(r'\s*END\s+(IF|LOOP|WHILE|CASE|REPEAT)\s*;', stripped, re.IGNORECASE):
-            pass  # these don't affect routine depth
-        elif re.match(r'\s*END\s*;\s*$', stripped, re.IGNORECASE):
-            depth -= 1
+        # Count END variants — skip END IF/LOOP/WHILE/CASE/REPEAT (control flow, not routine end)
+        # Also skip END followed by a word that isn't a semicolon (e.g. END label_name)
+        end_count = len(re.findall(r'\bEND\s*;', stripped, re.IGNORECASE))
+        control_ends = len(re.findall(r'\bEND\s+(?:IF|LOOP|WHILE|CASE|REPEAT)\b', stripped, re.IGNORECASE))
+        real_ends = end_count - control_ends
+
+        if real_ends > 0:
+            depth -= real_ends
             if depth <= 0:
                 flush_routine()
                 in_routine = False
@@ -404,6 +463,9 @@ export WINEDEBUG=err+all
 # Ensure native VC++ runtime DLLs take priority over Wine builtins
 export WINEDLLOVERRIDES="msvcp140=n,b;vcruntime140=n,b;ucrtbase=n,b"
 
+# Point Steam runtime to native steamclient.so for authentication
+export LD_LIBRARY_PATH="/home/lif/.steam/sdk64:${LD_LIBRARY_PATH:-}"
+
 echo "[*] Wine version: $(wine --version)"
 
 # ── First-run: create Wine prefix + install VC++ 2015 runtime ──────────────
@@ -466,7 +528,7 @@ exit $EXIT_CODE
 LAUNCHER
 
 # Inject the actual world ID and make executable
-sed -i "s/WORLD_ID_PLACEHOLDER/${WORLD_ID}/" /tmp/launch-lif.sh
+sed -i "s/WORLD_ID_PLACEHOLDER/${WORLD_ID}/g" /tmp/launch-lif.sh
 chmod +x /tmp/launch-lif.sh
 chown lif:lif /tmp/launch-lif.sh
 
