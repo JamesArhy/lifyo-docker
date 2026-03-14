@@ -505,6 +505,13 @@ fi
 # to succeed; it doesn't care what the process actually is.
 echo "[*] Setting up Steam bootstrapper emulation ..."
 
+# Ensure explorer.exe is running — on subsequent starts (Wine prefix already
+# initialized), no Wine processes are alive yet. We need explorer.exe as the
+# bootstrapper process, and it MUST stay alive when the game exe launches.
+# Using a virtual desktop keeps it running without displaying anything.
+wine explorer /desktop=dummy,1x1 &
+sleep 2
+
 # Get explorer.exe's Wine PID from winedbg (hex PIDs, convert to decimal)
 BOOTSTRAPPER_PID_HEX=$(winedbg --command "info proc" 2>/dev/null \
     | grep "'explorer.exe'" \
@@ -542,8 +549,13 @@ wine reg add "HKCU\\Software\\Valve\\Steam\\ActiveProcess" /v SteamPath /t REG_S
 wine reg add "HKCU\\Software\\Valve\\Steam\\ActiveProcess" /v Universe /t REG_SZ /d "Public" /f 2>/dev/null
 wine reg add "HKCU\\Software\\Valve\\Steam\\ActiveProcess" /v pid /t REG_DWORD /d $BOOTSTRAPPER_PID /f 2>/dev/null
 wine reg add "HKCU\\Software\\Valve\\Steam\\ActiveProcess" /v ActiveUser /t REG_DWORD /d 0 /f 2>/dev/null
-wineserver -w
+# DO NOT call wineserver -w here — it would kill explorer.exe and invalidate
+# the bootstrapper PID, causing "no bootstrapper found" on game launch.
 echo "[*] Steam bootstrapper registry configured."
+
+# Verify the bootstrapper is still alive before handing off to game launch
+echo "[debug] Verifying bootstrapper process is still alive:"
+winedbg --command "info proc" 2>/dev/null || true
 
 # ── Ensure steam_appid.txt exists ─────────────────────────────────────
 # Dedicated servers need this file so steam_api64.dll knows which AppID to
@@ -566,6 +578,8 @@ ls -la steam_api64.dll steamclient64.dll steamclient.dll steam_appid.txt 2>/dev/
 echo "[debug] steamclient.so location:"
 ls -la /home/lif/.steam/sdk64/steamclient.so 2>/dev/null || echo "[debug] steamclient.so NOT FOUND"
 echo "[debug] LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+echo "[debug] Steam ActiveProcess registry:"
+wine reg query "HKCU\\Software\\Valve\\Steam\\ActiveProcess" 2>/dev/null || echo "[debug] Registry query failed"
 
 echo "[*] Launching ddctd_cm_yo_server.exe -worldid WORLD_ID_PLACEHOLDER ..."
 wine ddctd_cm_yo_server.exe -worldid WORLD_ID_PLACEHOLDER
