@@ -493,41 +493,39 @@ else
     echo "[*] Wine prefix already initialized, skipping wineboot."
 fi
 
-# ── Steam registry setup for Wine ──────────────────────────────────────
-# steam_api64.dll reads HKCU\Software\Valve\Steam\ActiveProcess to find
-# steamclient64.dll. Without these registry keys, it reports "no bootstrapper
-# found" and the Steam Game Server API never initializes — causing
-# CR_STEAM_INVALID_TICKET for all players.
-STEAM_REG_MARKER="$WINEPREFIX/.steam_registry_configured"
-if [ ! -f "$STEAM_REG_MARKER" ]; then
-    echo "[*] Configuring Steam registry keys for Wine ..."
-    cat > /tmp/steam_registry.reg <<'STEAMREG'
+# ── Clean up broken Steam registry from previous versions ─────────────
+# Previous entrypoint versions injected ActiveProcess registry keys that told
+# steam_api64.dll a Steam client was running (pid=0xFFFE) and to load
+# steamclient64.dll from a path where it didn't exist. This caused the API to
+# fail to initialize rather than using the dedicated-server fallback path.
+# Remove these keys so the game server initializes Steam in standalone mode.
+STEAM_REG_V2_MARKER="$WINEPREFIX/.steam_registry_v2_cleaned"
+if [ ! -f "$STEAM_REG_V2_MARKER" ]; then
+    echo "[*] Cleaning up Steam registry keys (removing broken ActiveProcess hack) ..."
+    cat > /tmp/steam_registry_cleanup.reg <<'STEAMREG'
 Windows Registry Editor Version 5.00
 
-[HKEY_CURRENT_USER\Software\Valve\Steam]
-"SteamPath"="Z:\\home\\lif\\yoserver"
-"SteamExe"=""
-"Language"="english"
-
-[HKEY_CURRENT_USER\Software\Valve\Steam\ActiveProcess]
-"SteamClientDll"="Z:\\home\\lif\\yoserver\\steamclient.dll"
-"SteamClientDll64"="Z:\\home\\lif\\yoserver\\steamclient64.dll"
-"SteamPath"="Z:\\home\\lif\\yoserver"
-"Universe"="Public"
-"pid"=dword:0000fffe
-"ActiveUser"=dword:00000000
-
-[HKEY_LOCAL_MACHINE\Software\Wow6432Node\Valve\Steam]
-"InstallPath"="Z:\\home\\lif\\yoserver"
+[-HKEY_CURRENT_USER\Software\Valve\Steam\ActiveProcess]
+[-HKEY_CURRENT_USER\Software\Valve\Steam]
+[-HKEY_LOCAL_MACHINE\Software\Wow6432Node\Valve\Steam]
 STEAMREG
 
-    wine regedit /tmp/steam_registry.reg
+    wine regedit /tmp/steam_registry_cleanup.reg 2>/dev/null
     wineserver -w
-    rm -f /tmp/steam_registry.reg
-    touch "$STEAM_REG_MARKER"
-    echo "[*] Steam registry keys configured."
+    rm -f /tmp/steam_registry_cleanup.reg
+    touch "$STEAM_REG_V2_MARKER"
+    echo "[*] Steam registry cleaned."
 else
-    echo "[*] Steam registry keys already configured."
+    echo "[*] Steam registry already cleaned (v2)."
+fi
+
+# ── Ensure steam_appid.txt exists ─────────────────────────────────────
+# Dedicated servers need this file so steam_api64.dll knows which AppID to
+# initialize without a running Steam client. 290080 is the LiF:YO game AppID.
+if [ ! -f "/home/lif/yoserver/steam_appid.txt" ]; then
+    echo "290080" > /home/lif/yoserver/steam_appid.txt
+    chown lif:lif /home/lif/yoserver/steam_appid.txt
+    echo "[*] Created steam_appid.txt (AppID 290080)"
 fi
 
 cd /home/lif/yoserver
@@ -536,6 +534,12 @@ echo "[*] config_local.cs exists: $(test -f config_local.cs && echo 'yes' || ech
 echo "[*] config/world_WORLD_ID_PLACEHOLDER.xml exists: $(test -f config/world_WORLD_ID_PLACEHOLDER.xml && echo 'yes' || echo 'NO')"
 echo "[debug] config/ directory listing:"
 ls -la config/ 2>/dev/null || echo "[debug] config/ directory does not exist"
+
+echo "[debug] Steam files in server directory:"
+ls -la steam_api64.dll steamclient64.dll steamclient.dll steam_appid.txt 2>/dev/null || true
+echo "[debug] steamclient.so location:"
+ls -la /home/lif/.steam/sdk64/steamclient.so 2>/dev/null || echo "[debug] steamclient.so NOT FOUND"
+echo "[debug] LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
 
 echo "[*] Launching ddctd_cm_yo_server.exe -worldid WORLD_ID_PLACEHOLDER ..."
 wine ddctd_cm_yo_server.exe -worldid WORLD_ID_PLACEHOLDER
