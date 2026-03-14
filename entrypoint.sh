@@ -493,31 +493,57 @@ else
     echo "[*] Wine prefix already initialized, skipping wineboot."
 fi
 
-# ── Clean up broken Steam registry from previous versions ─────────────
-# Previous entrypoint versions injected ActiveProcess registry keys that told
-# steam_api64.dll a Steam client was running (pid=0xFFFE) and to load
-# steamclient64.dll from a path where it didn't exist. This caused the API to
-# fail to initialize rather than using the dedicated-server fallback path.
-# Remove these keys so the game server initializes Steam in standalone mode.
-STEAM_REG_V2_MARKER="$WINEPREFIX/.steam_registry_v2_cleaned"
-if [ ! -f "$STEAM_REG_V2_MARKER" ]; then
-    echo "[*] Cleaning up Steam registry keys (removing broken ActiveProcess hack) ..."
-    cat > /tmp/steam_registry_cleanup.reg <<'STEAMREG'
-Windows Registry Editor Version 5.00
+# ── Steam bootstrapper emulation ──────────────────────────────────────
+# steamclient64.dll checks HKCU\Software\Valve\Steam\ActiveProcess to find
+# a running Steam bootstrapper process. It calls OpenProcess(pid) to verify
+# the process exists. Without a valid Wine process at that PID, it logs
+# "Client version: no bootstrapper found" and cannot initialize — causing
+# CR_STEAM_INVALID_TICKET for all players.
+#
+# Solution: use the PID of explorer.exe — a Wine process that's always
+# running after wineboot. steamclient64.dll just needs OpenProcess(pid)
+# to succeed; it doesn't care what the process actually is.
+echo "[*] Setting up Steam bootstrapper emulation ..."
 
-[-HKEY_CURRENT_USER\Software\Valve\Steam\ActiveProcess]
-[-HKEY_CURRENT_USER\Software\Valve\Steam]
-[-HKEY_LOCAL_MACHINE\Software\Wow6432Node\Valve\Steam]
-STEAMREG
+# Get explorer.exe's Wine PID from winedbg (hex PIDs, convert to decimal)
+BOOTSTRAPPER_PID_HEX=$(winedbg --command "info proc" 2>/dev/null \
+    | grep "'explorer.exe'" \
+    | head -1 \
+    | awk '{print $1}')
 
-    wine regedit /tmp/steam_registry_cleanup.reg 2>/dev/null
-    wineserver -w
-    rm -f /tmp/steam_registry_cleanup.reg
-    touch "$STEAM_REG_V2_MARKER"
-    echo "[*] Steam registry cleaned."
+echo "[debug] Wine process list:"
+winedbg --command "info proc" 2>/dev/null || true
+
+if [ -n "$BOOTSTRAPPER_PID_HEX" ]; then
+    BOOTSTRAPPER_PID=$((16#${BOOTSTRAPPER_PID_HEX}))
+    echo "[*] Using explorer.exe as bootstrapper (Wine PID: 0x${BOOTSTRAPPER_PID_HEX} = ${BOOTSTRAPPER_PID})"
 else
-    echo "[*] Steam registry already cleaned (v2)."
+    # Fallback: use services.exe
+    BOOTSTRAPPER_PID_HEX=$(winedbg --command "info proc" 2>/dev/null \
+        | grep "'services.exe'" \
+        | head -1 \
+        | awk '{print $1}')
+    if [ -n "$BOOTSTRAPPER_PID_HEX" ]; then
+        BOOTSTRAPPER_PID=$((16#${BOOTSTRAPPER_PID_HEX}))
+        echo "[*] Using services.exe as bootstrapper (Wine PID: 0x${BOOTSTRAPPER_PID_HEX} = ${BOOTSTRAPPER_PID})"
+    else
+        echo "[!] WARNING: No Wine process found for bootstrapper PID"
+        BOOTSTRAPPER_PID=8
+    fi
 fi
+
+echo "[*] Setting Steam bootstrapper registry (pid=$BOOTSTRAPPER_PID) ..."
+wine reg add "HKCU\\Software\\Valve\\Steam" /v SteamPath /t REG_SZ /d "Z:\\home\\lif\\yoserver" /f 2>/dev/null
+wine reg add "HKCU\\Software\\Valve\\Steam" /v SteamExe /t REG_SZ /d "" /f 2>/dev/null
+wine reg add "HKCU\\Software\\Valve\\Steam" /v Language /t REG_SZ /d "english" /f 2>/dev/null
+wine reg add "HKCU\\Software\\Valve\\Steam\\ActiveProcess" /v SteamClientDll /t REG_SZ /d "Z:\\home\\lif\\yoserver\\steamclient.dll" /f 2>/dev/null
+wine reg add "HKCU\\Software\\Valve\\Steam\\ActiveProcess" /v SteamClientDll64 /t REG_SZ /d "Z:\\home\\lif\\yoserver\\steamclient64.dll" /f 2>/dev/null
+wine reg add "HKCU\\Software\\Valve\\Steam\\ActiveProcess" /v SteamPath /t REG_SZ /d "Z:\\home\\lif\\yoserver" /f 2>/dev/null
+wine reg add "HKCU\\Software\\Valve\\Steam\\ActiveProcess" /v Universe /t REG_SZ /d "Public" /f 2>/dev/null
+wine reg add "HKCU\\Software\\Valve\\Steam\\ActiveProcess" /v pid /t REG_DWORD /d $BOOTSTRAPPER_PID /f 2>/dev/null
+wine reg add "HKCU\\Software\\Valve\\Steam\\ActiveProcess" /v ActiveUser /t REG_DWORD /d 0 /f 2>/dev/null
+wineserver -w
+echo "[*] Steam bootstrapper registry configured."
 
 # ── Ensure steam_appid.txt exists ─────────────────────────────────────
 # Dedicated servers need this file so steam_api64.dll knows which AppID to
