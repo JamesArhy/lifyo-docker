@@ -493,6 +493,43 @@ else
     echo "[*] Wine prefix already initialized, skipping wineboot."
 fi
 
+# ── Steam registry setup for Wine ──────────────────────────────────────
+# steam_api64.dll reads HKCU\Software\Valve\Steam\ActiveProcess to find
+# steamclient64.dll. Without these registry keys, it reports "no bootstrapper
+# found" and the Steam Game Server API never initializes — causing
+# CR_STEAM_INVALID_TICKET for all players.
+STEAM_REG_MARKER="$WINEPREFIX/.steam_registry_configured"
+if [ ! -f "$STEAM_REG_MARKER" ]; then
+    echo "[*] Configuring Steam registry keys for Wine ..."
+    cat > /tmp/steam_registry.reg <<'STEAMREG'
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\Valve\Steam]
+"SteamPath"="Z:\\home\\lif\\yoserver"
+"SteamExe"=""
+"Language"="english"
+
+[HKEY_CURRENT_USER\Software\Valve\Steam\ActiveProcess]
+"SteamClientDll"="Z:\\home\\lif\\yoserver\\steamclient.dll"
+"SteamClientDll64"="Z:\\home\\lif\\yoserver\\steamclient64.dll"
+"SteamPath"="Z:\\home\\lif\\yoserver"
+"Universe"="Public"
+"pid"=dword:0000fffe
+"ActiveUser"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\Software\Wow6432Node\Valve\Steam]
+"InstallPath"="Z:\\home\\lif\\yoserver"
+STEAMREG
+
+    wine regedit /tmp/steam_registry.reg
+    wineserver -w
+    rm -f /tmp/steam_registry.reg
+    touch "$STEAM_REG_MARKER"
+    echo "[*] Steam registry keys configured."
+else
+    echo "[*] Steam registry keys already configured."
+fi
+
 cd /home/lif/yoserver
 
 echo "[*] config_local.cs exists: $(test -f config_local.cs && echo 'yes' || echo 'NO')"
