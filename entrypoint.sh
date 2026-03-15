@@ -34,6 +34,7 @@ set -euo pipefail
 : "${CRAFTING_SKILLCAP:=600}"
 : "${COMBAT_SKILLCAP:=400}"
 : "${MINOR_SKILLCAP:=400}"
+: "${SKILL_PARENT_MODE:=default}"          # default | lowered | none
 
 # World simulation
 : "${OBJECT_DECAY_RATE:=0}"
@@ -82,6 +83,7 @@ echo "  World ID    : ${WORLD_ID}"
 echo "  Game port   : ${GAME_PORT}"
 echo "  Max players : ${MAX_PLAYERS}"
 echo "  Skills mult : ${SKILLS_MULTIPLIER}x"
+echo "  Parent mode : ${SKILL_PARENT_MODE}"
 echo "  Game mode   : ${GAME_MODE}"
 echo ""
 
@@ -174,10 +176,47 @@ else
     echo "[*] steamclient.so already present at ${STEAMCLIENT_SO}"
 fi
 
+# ── Generate skill parent threshold overrides ────────────────────────────────
+# These TorqueScript globals are set by cm_skill_config.cs.dso (loaded before
+# config_local.cs) and define the parent SkillAmount required for each child tier.
+# Defaults: none=0, novice=30, apprentice=60, expert=90, master=100, grandmaster=100
+case "${SKILL_PARENT_MODE}" in
+    lowered)
+        echo "[*] Skill parent mode: lowered (0/10/30/45/60/100)"
+        SKILL_PARENT_OVERRIDES='$cm_skill_config::skill_level::none = 0;
+$cm_skill_config::skill_level::novice = 10;
+$cm_skill_config::skill_level::apprentice = 30;
+$cm_skill_config::skill_level::expert = 45;
+$cm_skill_config::skill_level::master = 60;
+$cm_skill_config::skill_level::grandmaster = 100;'
+        ;;
+    none)
+        echo "[*] Skill parent mode: none (all thresholds zeroed)"
+        SKILL_PARENT_OVERRIDES='$cm_skill_config::skill_level::none = 0;
+$cm_skill_config::skill_level::novice = 0;
+$cm_skill_config::skill_level::apprentice = 0;
+$cm_skill_config::skill_level::expert = 0;
+$cm_skill_config::skill_level::master = 0;
+$cm_skill_config::skill_level::grandmaster = 0;'
+        ;;
+    *)
+        echo "[*] Skill parent mode: default (vanilla thresholds)"
+        SKILL_PARENT_OVERRIDES=""
+        ;;
+esac
+
 # ── Generate config_local.cs from environment variables ───────────────────────
 echo "[*] Generating config_local.cs ..."
 export DB_HOST DB_PORT DB_USER DB_PASSWORD DB_NAME
 envsubst '${DB_HOST} ${DB_USER} ${DB_PASSWORD}' < "${TEMPLATE_DIR}/config_local.cs.template" > "${SERVER_DIR}/config_local.cs"
+
+# Append skill parent overrides (can't use envsubst — content has $ signs)
+if [ -n "${SKILL_PARENT_OVERRIDES}" ]; then
+    echo "" >> "${SERVER_DIR}/config_local.cs"
+    echo "// ── Skill Parent Thresholds (mode: ${SKILL_PARENT_MODE}) ───────────────────" >> "${SERVER_DIR}/config_local.cs"
+    echo "// Overrides cm_skill_config.cs.dso defaults for parent skill requirements." >> "${SERVER_DIR}/config_local.cs"
+    printf '%s\n' "${SKILL_PARENT_OVERRIDES}" >> "${SERVER_DIR}/config_local.cs"
+fi
 chown lif:lif "${SERVER_DIR}/config_local.cs"
 
 # ── Generate world_N.xml from environment variables ───────────────────────────

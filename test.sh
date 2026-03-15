@@ -81,6 +81,64 @@ run_test "compose vars in .env.example" bash -c '
     fi
 '
 
+# ── Skill parent mode checks ──────────────────────────────────────────────
+echo ""
+echo "Skill parent mode:"
+
+run_test "SKILL_PARENT_MODE in docker-compose" bash -c '
+    grep -q "SKILL_PARENT_MODE" docker-compose.yml
+'
+
+run_test "SKILL_PARENT_MODE in .env.example" bash -c '
+    grep -q "^SKILL_PARENT_MODE=" .env.example
+'
+
+run_test "SKILL_PARENT_MODE in entrypoint.sh" bash -c '
+    grep -q "SKILL_PARENT_MODE" entrypoint.sh
+'
+
+run_test "entrypoint handles all 3 modes" bash -c '
+    for mode in lowered none; do
+        if ! grep -q "${mode})" entrypoint.sh; then
+            echo "Missing mode: $mode"
+            exit 1
+        fi
+    done
+    # default is handled by the * wildcard case
+    if ! grep -q "Skill parent mode: default" entrypoint.sh; then
+        echo "Missing default fallback"
+        exit 1
+    fi
+'
+
+run_test "lowered mode sets 6 thresholds" bash -c '
+    count=$(sed -n "/lowered)/,/;;/p" entrypoint.sh | grep -c "skill_level::")
+    if [ "$count" -ne 6 ]; then
+        echo "Expected 6 skill_level lines in lowered mode, got $count"
+        exit 1
+    fi
+'
+
+run_test "none mode sets 6 thresholds" bash -c '
+    count=$(sed -n "/none)/,/;;/p" entrypoint.sh | grep -c "skill_level::")
+    if [ "$count" -ne 6 ]; then
+        echo "Expected 6 skill_level lines in none mode, got $count"
+        exit 1
+    fi
+'
+
+run_test "none mode all values are 0" bash -c '
+    bad=$(sed -n "/\"none\")/,/;;/p" entrypoint.sh | grep "skill_level::" | grep -v "= 0;" || true)
+    if [ -n "$bad" ]; then
+        echo "Non-zero values in none mode: $bad"
+        exit 1
+    fi
+'
+
+run_test "README documents SKILL_PARENT_MODE" bash -c '
+    grep -q "SKILL_PARENT_MODE" README.md
+'
+
 # ── Template variable checks ───────────────────────────────────────────────
 run_test "template vars are exported" bash -c '
     missing=""

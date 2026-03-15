@@ -111,12 +111,28 @@ All settings are configured through environment variables in `.env` or
 
 ### Skills & Progression
 
-| Variable             | Default | Range       | Description                                      |
-|----------------------|---------|-------------|--------------------------------------------------|
-| `SKILLS_MULTIPLIER`  | `10`    | 0.1-100     | XP rate multiplier (1 = vanilla MMO rate)        |
-| `CRAFTING_SKILLCAP`  | `600`   | 200-3000    | Crafting skills group cap (600 = vanilla)        |
-| `COMBAT_SKILLCAP`    | `400`   | 200-3000    | Combat skills group cap (400 = vanilla)          |
-| `MINOR_SKILLCAP`     | `400`   | 200-3000    | Minor skills group cap (400 = vanilla)           |
+| Variable             | Default   | Range       | Description                                      |
+|----------------------|-----------|-------------|--------------------------------------------------|
+| `SKILLS_MULTIPLIER`  | `10`      | 0.1-100     | XP rate multiplier (1 = vanilla MMO rate)        |
+| `CRAFTING_SKILLCAP`  | `600`     | 200-3000    | Crafting skills group cap (600 = vanilla)        |
+| `COMBAT_SKILLCAP`    | `400`     | 200-3000    | Combat skills group cap (400 = vanilla)          |
+| `MINOR_SKILLCAP`     | `400`     | 200-3000    | Minor skills group cap (400 = vanilla)           |
+| `SKILL_PARENT_MODE`  | `default` | see below   | Parent skill threshold mode                      |
+
+#### Skill Parent Mode
+
+In vanilla LiF, child skills are capped by their parent skill's level (e.g. you
+can't raise Construction past your Artisan level). `SKILL_PARENT_MODE` controls
+how strict this gating is:
+
+| Mode      | Thresholds (none/novice/apprentice/expert/master/gm) | Effect                                    |
+|-----------|------------------------------------------------------|-------------------------------------------|
+| `default` | 0 / 30 / 60 / 90 / 100 / 100                        | Vanilla — parent must match child tier     |
+| `lowered` | 0 / 10 / 30 / 45 / 60 / 100                         | Parent gate exists but is much lower       |
+| `none`    | 0 / 0 / 0 / 0 / 0 / 0                               | Parent skill never gates children          |
+
+These override the TorqueScript globals `$cm_skill_config::skill_level::*` via
+`config_local.cs`, which loads after the compiled defaults.
 
 ### World Simulation
 
