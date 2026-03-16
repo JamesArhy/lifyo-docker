@@ -118,6 +118,7 @@ All settings are configured through environment variables in `.env` or
 | `COMBAT_SKILLCAP`    | `400`     | 200-3000    | Combat skills group cap (400 = vanilla)          |
 | `MINOR_SKILLCAP`     | `400`     | 200-3000    | Minor skills group cap (400 = vanilla)           |
 | `SKILL_PARENT_MODE`  | `default` | see below   | Parent skill threshold mode                      |
+| `STARTING_SKILL_BOOST` | `none` | see below   | Boost root skills for new characters             |
 
 #### Skill Parent Mode
 
@@ -133,6 +134,27 @@ how strict this gating is:
 
 These override the TorqueScript globals `$cm_skill_config::skill_level::*` via
 `config_local.cs`, which loads after the compiled defaults.
+
+> **Client-side UI:** The tier markers shown in the skill panel (0/30/60/90/100)
+> are rendered by the game client and cannot be changed server-side. The server
+> enforces the lowered thresholds regardless of what the client displays.
+
+#### Starting Skill Boost
+
+New characters start with all skills at 0, requiring a long grind on parent
+skills (Artisan, Nature's Lore) before children (Construction, Farming) become
+useful. `STARTING_SKILL_BOOST` runs a background loop every 10 seconds that
+automatically raises root skills to level 60 for all characters:
+
+| Mode        | Boosted Skills                                                    |
+|-------------|-------------------------------------------------------------------|
+| `none`      | Disabled — vanilla starting skills                                |
+| `parents`   | Artisan, Nature's Lore, Hunting (crafting/gathering parents)      |
+| `all-roots` | All 17 root skills including combat (Cavalryman, Militia, etc.)   |
+
+Characters created while the boost is active will have their root skills raised
+within 10 seconds. Existing characters below level 60 on the boosted skills are
+also raised. Players may need to relog to see the updated values.
 
 ### World Simulation
 
@@ -315,6 +337,7 @@ Subsequent starts are much faster since everything is persisted in volumes.
 ```
 ├── .env.example              # All settings with defaults & documentation
 ├── .gitignore
+├── skills.md                 # Skill ID reference table, skill chains, admin SQL commands
 ├── Dockerfile                # Ubuntu 22.04 + Wine + SteamCMD + game server
 ├── LICENSE                   # GPL-3.0
 ├── docker-compose.yml        # Build locally — orchestrates MariaDB + LiF server

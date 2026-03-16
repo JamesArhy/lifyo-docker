@@ -436,18 +436,14 @@ else
     fi
 fi
 
-# ── Starting skill boost (BEFORE INSERT trigger) ─────────────────────────────
-# Intercepts the engine's INSERT INTO skills (SkillAmount=0) during character
-# creation and boosts root skills so new characters skip the parent grind.
-#   none      — vanilla (all skills start at 0)
-#   parents   — crafting parent skills (Artisan, Nature's Lore, Hunting) start at 60
-#   all-roots — ALL root skills start at 60 (includes combat roots)
+# ── Starting skill boost (background loop) ───────────────────────────────────
+# The game engine bypasses MySQL triggers during character creation, so we use
+# a background loop that periodically boosts root skills for all characters.
+#   none      — vanilla (no boost)
+#   parents   — crafting parent skills (Artisan, Nature's Lore, Hunting) boost to 60
+#   all-roots — ALL root skills boost to 60 (includes combat roots)
 if [ "${STARTING_SKILL_BOOST}" != "none" ]; then
     echo "[*] Setting up starting skill boost (mode: ${STARTING_SKILL_BOOST}) ..."
-
-    # Drop existing trigger if present (idempotent)
-    mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
-        -e "DROP TRIGGER IF EXISTS tr_boost_new_skills;" 2>/dev/null
 
     # Build the skill ID list based on mode
     case "${STARTING_SKILL_BOOST}" in
@@ -469,25 +465,28 @@ if [ "${STARTING_SKILL_BOOST}" != "none" ]; then
     esac
 
     if [ -n "${BOOST_SKILL_IDS}" ]; then
+        # Clean up leftover trigger/event from previous approaches
+        mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
+            -e "DROP TRIGGER IF EXISTS tr_boost_new_skills; DROP EVENT IF EXISTS ev_boost_new_skills;" 2>/dev/null
+
         # Level 60 = 600,000,000 in SkillAmount scale (10,000,000 per displayed level)
-        mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" <<TRIGGERSQL
-DELIMITER //
-CREATE TRIGGER tr_boost_new_skills
-BEFORE INSERT ON skills
-FOR EACH ROW
-BEGIN
-    IF NEW.SkillAmount = 0 AND NEW.SkillTypeID IN (${BOOST_SKILL_IDS}) THEN
-        SET NEW.SkillAmount = 600000000;
-    END IF;
-END //
-DELIMITER ;
-TRIGGERSQL
-        echo "[*] Starting skill boost trigger installed (boosted IDs: ${BOOST_SKILL_IDS})"
+        (
+            while true; do
+                sleep 10
+                AFFECTED=$(mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
+                    -N -e "UPDATE skills SET SkillAmount = 600000000 WHERE SkillTypeID IN (${BOOST_SKILL_IDS}) AND SkillAmount < 600000000; SELECT ROW_COUNT();" 2>/dev/null)
+                if [ -n "${AFFECTED}" ] && [ "${AFFECTED}" -gt 0 ] 2>/dev/null; then
+                    echo "[skill-boost] Boosted ${AFFECTED} skill(s) to level 60"
+                fi
+            done
+        ) &
+        SKILL_BOOST_PID=$!
+        echo "[*] Skill boost loop running every 10s (PID ${SKILL_BOOST_PID}, boosted IDs: ${BOOST_SKILL_IDS})"
     fi
 else
-    # Remove trigger if it exists (user switched back to none)
+    # Clean up leftover trigger/event from previous approaches
     mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
-        -e "DROP TRIGGER IF EXISTS tr_boost_new_skills;" 2>/dev/null
+        -e "DROP TRIGGER IF EXISTS tr_boost_new_skills; DROP EVENT IF EXISTS ev_boost_new_skills;" 2>/dev/null
     echo "[*] Starting skill boost: none (vanilla)"
 fi
 
