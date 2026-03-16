@@ -77,6 +77,7 @@ services:
       COMBAT_SKILLCAP:    "${COMBAT_SKILLCAP:-400}"       # 200–3000 (400 = vanilla)
       MINOR_SKILLCAP:     "${MINOR_SKILLCAP:-400}"        # 200–3000 (400 = vanilla)
       SKILL_PARENT_MODE:  "${SKILL_PARENT_MODE:-default}" # default | lowered | none
+      STARTING_SKILL_BOOST: "${STARTING_SKILL_BOOST:-none}" # none | parents | all-roots
 
       # ── World simulation ─────────────────────────────────────────────────
       OBJECT_DECAY_RATE:    "${OBJECT_DECAY_RATE:-0}"     # 0 = no decay

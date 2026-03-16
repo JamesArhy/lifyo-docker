@@ -35,6 +35,7 @@ set -euo pipefail
 : "${COMBAT_SKILLCAP:=400}"
 : "${MINOR_SKILLCAP:=400}"
 : "${SKILL_PARENT_MODE:=default}"          # default | lowered | none
+: "${STARTING_SKILL_BOOST:=none}"          # none | parents | all-roots
 
 # World simulation
 : "${OBJECT_DECAY_RATE:=0}"
@@ -84,6 +85,7 @@ echo "  Game port   : ${GAME_PORT}"
 echo "  Max players : ${MAX_PLAYERS}"
 echo "  Skills mult : ${SKILLS_MULTIPLIER}x"
 echo "  Parent mode : ${SKILL_PARENT_MODE}"
+echo "  Skill boost : ${STARTING_SKILL_BOOST}"
 echo "  Game mode   : ${GAME_MODE}"
 echo ""
 
@@ -432,6 +434,61 @@ else
             echo "[!] Re-import also had errors. Check logs above."
         fi
     fi
+fi
+
+# ── Starting skill boost (BEFORE INSERT trigger) ─────────────────────────────
+# Intercepts the engine's INSERT INTO skills (SkillAmount=0) during character
+# creation and boosts root skills so new characters skip the parent grind.
+#   none      — vanilla (all skills start at 0)
+#   parents   — crafting parent skills (Artisan, Nature's Lore, Hunting) start at 60
+#   all-roots — ALL root skills start at 60 (includes combat roots)
+if [ "${STARTING_SKILL_BOOST}" != "none" ]; then
+    echo "[*] Setting up starting skill boost (mode: ${STARTING_SKILL_BOOST}) ..."
+
+    # Drop existing trigger if present (idempotent)
+    mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
+        -e "DROP TRIGGER IF EXISTS tr_boost_new_skills;" 2>/dev/null
+
+    # Build the skill ID list based on mode
+    case "${STARTING_SKILL_BOOST}" in
+        parents)
+            # Artisan(1), Nature's Lore(11), Hunting(51) — crafting/gathering parents only
+            BOOST_SKILL_IDS="1, 11, 51"
+            ;;
+        all-roots)
+            # All root skills including combat: Artisan(1), Nature's Lore(11), Cavalryman(28),
+            # Militia(33), Footman(36), Assaulter(43), Slinger(47), Hunting(51),
+            # Arts(53), Piety(54), Mentoring(55), Unit&Formation(56),
+            # Equipment Maintain(57), Battle Survival(58), Demolition(59), Movement(61), General Actions(62)
+            BOOST_SKILL_IDS="1, 11, 28, 33, 36, 43, 47, 51, 53, 54, 55, 56, 57, 58, 59, 61, 62"
+            ;;
+        *)
+            echo "[!] Unknown STARTING_SKILL_BOOST mode: ${STARTING_SKILL_BOOST}, skipping."
+            BOOST_SKILL_IDS=""
+            ;;
+    esac
+
+    if [ -n "${BOOST_SKILL_IDS}" ]; then
+        # Level 60 = 600,000,000 in SkillAmount scale (10,000,000 per displayed level)
+        mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" <<TRIGGERSQL
+DELIMITER //
+CREATE TRIGGER tr_boost_new_skills
+BEFORE INSERT ON skills
+FOR EACH ROW
+BEGIN
+    IF NEW.SkillAmount = 0 AND NEW.SkillTypeID IN (${BOOST_SKILL_IDS}) THEN
+        SET NEW.SkillAmount = 600000000;
+    END IF;
+END //
+DELIMITER ;
+TRIGGERSQL
+        echo "[*] Starting skill boost trigger installed (boosted IDs: ${BOOST_SKILL_IDS})"
+    fi
+else
+    # Remove trigger if it exists (user switched back to none)
+    mysql -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" \
+        -e "DROP TRIGGER IF EXISTS tr_boost_new_skills;" 2>/dev/null
+    echo "[*] Starting skill boost: none (vanilla)"
 fi
 
 # ── Fix volume permissions ────────────────────────────────────────────────────
